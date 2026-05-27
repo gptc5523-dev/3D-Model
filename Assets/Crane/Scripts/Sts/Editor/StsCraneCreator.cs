@@ -158,8 +158,10 @@ namespace Container.Crane.Sts.EditorTools
             var stsCrane = root.AddComponent<StsCrane>();
             stsCrane.Configure(boom.transform, trolleyMover, spreaderHoist, spreaderAttach);
 
-            // 자동 구동 드라이버 — Play 시 트롤리 왕복 + 스프레더 승강 사이클 반복
+            // 자동 구동 드라이버(데모) — Play 시 트롤리 왕복 + 스프레더 승강 사이클 반복
             root.AddComponent<StsCraneOperator>();
+            // VR 컨트롤러 수동 조종 — 켜지면 자동 사이클을 끄고 스틱/트리거로 직접 조종
+            root.AddComponent<StsCraneVRController>();
 
             _matCache = null;
             _steelTex = null;   // 텍스처는 머티리얼이 참조 유지 → 캐시 핸들만 해제
