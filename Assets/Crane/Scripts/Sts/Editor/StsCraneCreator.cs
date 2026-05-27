@@ -29,7 +29,7 @@ namespace Container.Crane.Sts.EditorTools
 
         // 트롤리 가동 (붐 로컬 X) — 음수=육지쪽 backreach, 양수=바다쪽 outreach
         const float TrolleyMinX  = -4f  * Scale;   // ≈ -0.167m
-        const float TrolleyMaxX  =  16f * Scale;   // ≈  0.667m
+        const float TrolleyMaxX  =  38f * Scale;   // ≈ 1.58m — 붐 거의 끝까지 트롤리 주행
         const float TrolleyRestX =  8f  * Scale;   // ≈  0.333m
 
         // 높이/치수
@@ -42,14 +42,14 @@ namespace Container.Crane.Sts.EditorTools
 
         // 붐 거더 X 끝점 — 거더/레일/격자/스테이가 공유(한 군데서 길이 관리)
         const float BoomBackX = TrolleyMinX - 0.27f;   // 백리치(육지쪽) 끝 — 0.20→0.27 추가 연장
-        const float BoomTipX  = TrolleyMaxX + 1.05f;   // 아웃리치(바다쪽) 끝 — 더더더 길게
+        const float BoomTipX  = TrolleyMaxX + 0.1f;    // 아웃리치 끝 — 트롤리 끝 + 팁 구조 여유(트롤리가 거의 끝까지)
 
         // 다리 X 위치(붐 로컬 = 루트 로컬, 붐이 루트 x=0에 있으므로 동일)
         const float LandLegX  = 0f;
         const float WaterLegX = LegSpanX;
 
         // 스프레더 승강 (spreaderRoot=붐 레벨 기준 로컬 Y, 음수=아래)
-        const float SpreaderMaxY  = -0.6f * Scale;          // 트롤리 바로 아래
+        const float SpreaderMaxY  = -3f  * Scale;           // 완전 상승 = 헤드블록이 트롤리 바로 아래 도킹(붐에 안 박히게)
         const float SpreaderMinY  = -(RailH - 0.8f * Scale); // 지면 직전(붐 높이에 연동)
         const float SpreaderRestY = -10f * Scale;
 
@@ -72,6 +72,8 @@ namespace Container.Crane.Sts.EditorTools
         static Dictionary<Color, Material> _matCache;
         // 모든 머티리얼이 공유하는 절차 생성 강철 디테일 텍스처(_BaseColor로 틴트)
         static Texture2D _steelTex;
+        // 모든 Box/Strut가 공유하는 모서리 베벨(챔퍼) 큐브 메시
+        static Mesh _beveledCube;
 
         [MenuItem("Container/Create STS Crane")]
         public static void CreateFromMenu()
@@ -135,8 +137,8 @@ namespace Container.Crane.Sts.EditorTools
             attachPoint.transform.SetParent(spreader.transform, worldPositionStays: false);
             attachPoint.transform.localPosition = new Vector3(0f, -0.01f, 0f);
 
-            // 호이스트 로프 — rest pose 기준(정지 시 정확). 승강 애니메이션엔 별도 신축 컴포넌트 필요.
-            BuildHoistRopes(spreaderRoot.transform);
+            // 호이스트 로프 — HoistRopeRig가 매 프레임 스프레더 Y에 맞춰 신축
+            BuildHoistRopes(spreaderRoot.transform, spreader.transform);
 
             // 컴포넌트 부착 + 설정
             var trolleyMover = trolley.AddComponent<TrolleyMover>();
@@ -155,6 +157,9 @@ namespace Container.Crane.Sts.EditorTools
             // 루트 컴포넌트 — Facade로 묶기
             var stsCrane = root.AddComponent<StsCrane>();
             stsCrane.Configure(boom.transform, trolleyMover, spreaderHoist, spreaderAttach);
+
+            // 자동 구동 드라이버 — Play 시 트롤리 왕복 + 스프레더 승강 사이클 반복
+            root.AddComponent<StsCraneOperator>();
 
             _matCache = null;
             _steelTex = null;   // 텍스처는 머티리얼이 참조 유지 → 캐시 핸들만 해제
@@ -961,19 +966,30 @@ namespace Container.Crane.Sts.EditorTools
                     new Vector3(0.013f, 0.008f, 0.013f), CLight);
         }
 
-        // 호이스트 로프 4줄 — spreaderRoot(붐 레벨 y=0) → 스프레더 헤드(rest)
-        static void BuildHoistRopes(Transform spreaderRoot)
+        // 호이스트 로프 4줄 — spreaderRoot(붐 레벨 y=0) → 스프레더 헤드.
+        // 정적 생성 후 HoistRopeRig가 매 프레임 스프레더 Y에 맞춰 신축(게임 런타임).
+        static void BuildHoistRopes(Transform spreaderRoot, Transform spreader)
         {
-            float topY = -0.02f;                 // 트롤리 헤드 바로 아래
-            float botY = SpreaderRestY + 0.05f;  // 스프레더 헤드 상단(rest)
+            float topY = -0.02f;               // 로프 상단(트롤리 헤드 아래)
+            float attachOffsetY = 0.05f;       // 스프레더 원점 → 헤드블록 상단(로프 하단)
+            float radius = 0.0035f;
+            float restBotY = SpreaderRestY + attachOffsetY;
+
+            var ropes = new List<Transform>();
+            var anchors = new List<Vector2>();
             for (int sx = -1; sx <= 1; sx += 2)
             for (int sz = -1; sz <= 1; sz += 2)
             {
                 float x = sx * 0.03f;
-                float z = sz * 0.05f;   // 넓어진 트롤리/스프레더(Z 긴 축)에 맞춰 로프 간격 확대
-                Rod(spreaderRoot, "Hoist_Rope",
-                    new Vector3(x, topY, z), new Vector3(x, botY, z), 0.0035f, CCable);
+                float z = sz * 0.05f;   // 넓어진 트롤리/스프레더(Z 긴 축)에 맞춤
+                var rope = Rod(spreaderRoot, "Hoist_Rope",
+                    new Vector3(x, topY, z), new Vector3(x, restBotY, z), radius, CCable);
+                ropes.Add(rope.transform);
+                anchors.Add(new Vector2(x, z));
             }
+            // 매 프레임 트롤리↔스프레더 사이로 로프 신축
+            var rig = spreaderRoot.gameObject.AddComponent<HoistRopeRig>();
+            rig.Configure(spreader, topY, attachOffsetY, ropes.ToArray(), anchors.ToArray(), radius);
         }
 
         // ───────────────────────── 디테일 지오메트리 (D) ─────────────────────────
@@ -1443,8 +1459,85 @@ namespace Container.Crane.Sts.EditorTools
             return m;
         }
 
+        // 모서리 베벨(챔퍼) 큐브를 사용 — 모든 Box/Strut가 공유 메시로 "마감된 느낌"
         static GameObject NewCube(string name, Transform parent)
-            => NewPrimitive(PrimitiveType.Cube, name, parent);
+        {
+            var go = new GameObject(name);
+            go.AddComponent<MeshFilter>().sharedMesh = GetBeveledCube();
+            go.AddComponent<MeshRenderer>();
+            go.transform.SetParent(parent, worldPositionStays: false);
+            return go;
+        }
+
+        // 12 모서리를 살짝 깎은 단위 큐브(챔퍼) 메시. 면 방향은 outward로 자동 보정, 면당 UV 0~1 유지.
+        static Mesh GetBeveledCube()
+        {
+            if (_beveledCube != null) return _beveledCube;
+            const float h = 0.5f, c = 0.06f;   // c=베벨 폭(살짝)
+            float b = h - c;
+            var v = new List<Vector3>(); var t = new List<int>(); var uv = new List<Vector2>();
+            Vector3[] ax = { Vector3.right, Vector3.up, Vector3.forward };
+
+            // 6 메인 면(축소된 사각형)
+            for (int a = 0; a < 3; a++)
+            for (int s = -1; s <= 1; s += 2)
+            {
+                int a1 = (a + 1) % 3, a2 = (a + 2) % 3;
+                AddBevQuad(v, t, uv,
+                    AxV(a, s * h, a1, -b, a2, -b), AxV(a, s * h, a1, b, a2, -b),
+                    AxV(a, s * h, a1, b, a2, b),   AxV(a, s * h, a1, -b, a2, b), ax[a] * s);
+            }
+            // 12 모서리 챔퍼 면
+            for (int a = 0; a < 3; a++)
+            for (int s1 = -1; s1 <= 1; s1 += 2)
+            for (int s2 = -1; s2 <= 1; s2 += 2)
+            {
+                int a1 = (a + 1) % 3, a2 = (a + 2) % 3;
+                AddBevQuad(v, t, uv,
+                    AxV(a1, s1 * h, a2, s2 * b, a, -b), AxV(a1, s1 * h, a2, s2 * b, a, b),
+                    AxV(a1, s1 * b, a2, s2 * h, a, b),  AxV(a1, s1 * b, a2, s2 * h, a, -b),
+                    ax[a1] * s1 + ax[a2] * s2);
+            }
+            // 8 코너 삼각형
+            for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2)
+            for (int sz = -1; sz <= 1; sz += 2)
+                AddBevTri(v, t, uv,
+                    new Vector3(sx * h, sy * b, sz * b), new Vector3(sx * b, sy * h, sz * b),
+                    new Vector3(sx * b, sy * b, sz * h), new Vector3(sx, sy, sz));
+
+            var m = new Mesh { name = "STS_BeveledCube" };
+            m.SetVertices(v); m.SetUVs(0, uv); m.SetTriangles(t, 0);
+            m.RecalculateNormals(); m.RecalculateBounds();
+            return _beveledCube = m;
+        }
+
+        // 축 인덱스로 Vector3 구성
+        static Vector3 AxV(int a, float va, int a1, float va1, int a2, float va2)
+        { var p = Vector3.zero; p[a] = va; p[a1] = va1; p[a2] = va2; return p; }
+
+        // 사각/삼각 추가 — outward 기준으로 와인딩 자동 보정(뒤집힘 방지) + UV 0~1
+        static void AddBevQuad(List<Vector3> v, List<int> t, List<Vector2> uv,
+                               Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 outward)
+        {
+            int i = v.Count; v.Add(a); v.Add(b); v.Add(c); v.Add(d);
+            uv.Add(new Vector2(0, 0)); uv.Add(new Vector2(1, 0)); uv.Add(new Vector2(1, 1)); uv.Add(new Vector2(0, 1));
+            if (Vector3.Dot(Vector3.Cross(b - a, c - a), outward) < 0f)
+            { t.Add(i); t.Add(i + 2); t.Add(i + 1); t.Add(i); t.Add(i + 3); t.Add(i + 2); }
+            else
+            { t.Add(i); t.Add(i + 1); t.Add(i + 2); t.Add(i); t.Add(i + 2); t.Add(i + 3); }
+        }
+
+        static void AddBevTri(List<Vector3> v, List<int> t, List<Vector2> uv,
+                              Vector3 a, Vector3 b, Vector3 c, Vector3 outward)
+        {
+            int i = v.Count; v.Add(a); v.Add(b); v.Add(c);
+            uv.Add(new Vector2(0, 0)); uv.Add(new Vector2(1, 0)); uv.Add(new Vector2(0.5f, 1));
+            if (Vector3.Dot(Vector3.Cross(b - a, c - a), outward) < 0f)
+            { t.Add(i); t.Add(i + 2); t.Add(i + 1); }
+            else
+            { t.Add(i); t.Add(i + 1); t.Add(i + 2); }
+        }
 
         static GameObject NewPrimitive(PrimitiveType type, string name, Transform parent)
         {
