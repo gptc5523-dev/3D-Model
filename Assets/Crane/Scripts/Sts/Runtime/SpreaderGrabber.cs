@@ -1,0 +1,207 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace Container.Crane.Sts
+{
+    /// <summary>
+    /// 크레인 외부의 Rigidbody(=집을 수 있는 화물/컨테이너)를 트위스트락 콘 위치 기준으로 잡고/놓고,
+    /// 빈 스프레더가 컨테이너 윗면을 통과하지 못하게 호이스트를 클램프한다(게임 동작).
+    /// 컨테이너 식별은 특정 컴포넌트(ContainerInstance 등)에 의존하지 않는다 — Rigidbody가 달린
+    /// 자유 강체면 절차적 스폰(VRTestMenu)이든 프리팹이든 모두 잡힌다. VR 컨트롤러가 ToggleGrab()을 호출한다.
+    /// </summary>
+    [AddComponentMenu("Container/STS Crane/Spreader Grabber")]
+    [RequireComponent(typeof(StsCrane))]
+    [DisallowMultipleComponent]
+    public sealed class SpreaderGrabber : MonoBehaviour
+    {
+        [Header("잡기")]
+        [Tooltip("트위스트락(콘)에서 이 거리 안의 가장 가까운 컨테이너를 잡는다(m)")]
+        [SerializeField] float grabRange = 0.35f;
+        [Tooltip("잡은 컨테이너 긴 축이 이 길이를 넘으면 40ft로 자동 신축(20ft≈0.25 / 40ft≈0.51, m)")]
+        [SerializeField] float sizeThreshold = 0.38f;
+        [Tooltip("Console에 집기 진단 로그 출력")]
+        [SerializeField] bool debugLog = true;
+
+        [Header("통과 방지")]
+        [SerializeField] bool blockPassThrough = true;
+        [Tooltip("컨테이너 윗면 위로 둘 여유(m)")]
+        [SerializeField] float topClearance = 0f;
+        [Tooltip("footprint 바깥으로 이 수평 거리까지는 '위'로 보고 멈춤(m)")]
+        [SerializeField] float passXZmargin = 0.1f;
+
+        [Header("성능")]
+        [SerializeField] float refreshInterval = 0.5f;
+
+        StsCrane crane;
+        SpreaderLockAnimator lockAnim;
+        SpreaderTelescope telescope;   // 잡은 컨테이너 크기에 맞춰 20/40ft 신축
+        Transform[] twistlocks;   // Twistlock_Cone들 — 잡기 기준점
+        Rigidbody[] bodies = System.Array.Empty<Rigidbody>();   // 크레인 외부의 집을 수 있는 강체들
+        float nextRefresh;
+
+        Transform AttachPoint => (crane != null && crane.Attach != null) ? crane.Attach.transform : null;
+
+        void Awake()
+        {
+            crane = GetComponent<StsCrane>();
+            lockAnim = GetComponentInChildren<SpreaderLockAnimator>(true);
+            telescope = GetComponentInChildren<SpreaderTelescope>(true);
+
+            var list = new List<Transform>();
+            foreach (var t in GetComponentsInChildren<Transform>(true))
+                if (t.name == "Twistlock_Cone") list.Add(t);
+            twistlocks = list.ToArray();
+
+            Refresh();
+        }
+
+        void Start()
+        {
+            // 이 줄이 Play 시 Console에 안 보이면 = SpreaderGrabber가 안 돌고 있는 것(컴파일/재생성 문제)
+            if (debugLog)
+                Debug.Log($"[Crane] SpreaderGrabber 활성 — 트위스트락 {twistlocks.Length}개, " +
+                          $"집을수있는강체 {bodies.Length}개, 통과방지 {blockPassThrough}");
+        }
+
+        void Refresh()
+        {
+            // 크레인 자신(스프레더/부착된 화물 포함) 아래의 강체는 제외 — 외부 자유 강체만 후보
+            var all = FindObjectsByType<Rigidbody>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            var list = new List<Rigidbody>(all.Length);
+            foreach (var rb in all)
+                if (rb != null && !rb.transform.IsChildOf(transform)) list.Add(rb);
+            bodies = list.ToArray();
+            nextRefresh = Time.time + refreshInterval;
+        }
+
+        // 트위스트락 콘들의 중심(없으면 부착점) — 잡기 기준점
+        Vector3 GrabPoint()
+        {
+            if (twistlocks != null && twistlocks.Length > 0)
+            {
+                Vector3 sum = Vector3.zero; int n = 0;
+                foreach (var t in twistlocks) if (t != null) { sum += t.position; n++; }
+                if (n > 0) return sum / n;
+            }
+            return AttachPoint != null ? AttachPoint.position : transform.position;
+        }
+
+        /// <summary>VR 컨트롤러 Y 버튼 — 비어 있으면 트위스트락 근처 컨테이너를 잡는다(이미 잡았으면 무시).</summary>
+        public void Grab()
+        {
+            var attach = crane != null ? crane.Attach : null;
+            if (attach == null || attach.HasContainer) return;
+
+            Vector3 gp = GrabPoint();
+            var c = FindNearest(gp, out float dist);
+            if (debugLog)
+                Debug.Log($"[Crane] 집기 시도 — 기준점(트위스트락) {gp}, 후보 {bodies.Length}개, " +
+                          $"최근접 {(c != null ? $"{c.name} (거리 {dist:F3} / 허용 {grabRange})" : "없음")}");
+            if (c == null) return;
+
+            // 컨테이너 윗면을 부착점(스프레더 밑)에 맞춰 매달기 — 중앙 관통 방지
+            bool hasBounds = TryBounds(c, out Bounds b);
+            float pivotToTop = hasBounds ? (b.max.y - c.position.y) : 0f;
+
+            // 잡은 컨테이너 긴 축 길이로 스프레더 텔레스코픽 자동 신축(20/40ft). 놓아도 유지.
+            if (telescope != null && hasBounds)
+            {
+                float longSide = Mathf.Max(b.size.x, b.size.z);
+                bool is40 = longSide > sizeThreshold;
+                telescope.Set40(is40);
+                if (debugLog) Debug.Log($"[Crane] 컨테이너 긴축 {longSide:F3}m → {(is40 ? "40ft" : "20ft")} 신축");
+            }
+
+            attach.Attach(c);
+            Vector3 lp = c.localPosition;
+            lp.y -= pivotToTop;
+            c.localPosition = lp;
+
+            if (lockAnim != null) lockAnim.SetLocked(true);
+        }
+
+        /// <summary>VR 컨트롤러 X 버튼 — 잡고 있으면 놓는다(비어 있으면 무시).</summary>
+        public void Release()
+        {
+            var attach = crane != null ? crane.Attach : null;
+            if (attach == null || !attach.HasContainer) return;
+
+            attach.Detach();
+            if (lockAnim != null) lockAnim.SetLocked(false);
+            if (debugLog) Debug.Log("[Crane] 놓기(Detach)");
+        }
+
+        /// <summary>잡고 있으면 놓고, 아니면 잡는다(토글). 단일 버튼 매핑용 — 현재 컨트롤러는 Grab/Release를 직접 호출.</summary>
+        public void ToggleGrab()
+        {
+            var attach = crane != null ? crane.Attach : null;
+            if (attach != null && attach.HasContainer) Release();
+            else Grab();
+        }
+
+        void LateUpdate()
+        {
+            if (Time.time >= nextRefresh) Refresh();
+            if (!blockPassThrough || crane == null) return;
+
+            var attach = crane.Attach;
+            var hoist = crane.Spreader;
+            Transform ap = AttachPoint;
+            if (attach == null || hoist == null || ap == null || attach.HasContainer) return;
+
+            // 부착점 XZ footprint 안의 컨테이너 중 윗면이 가장 높은 것 → 그 위에서 멈춤
+            float top = float.MinValue;
+            bool over = false;
+            Vector3 p = ap.position;
+            foreach (var rb in bodies)
+            {
+                if (rb == null || !TryBounds(rb.transform, out Bounds b)) continue;
+                // footprint까지 수평 거리(안쪽이면 0) — passXZmargin 안이면 '위'로 간주
+                float dx = Mathf.Max(b.min.x - p.x, p.x - b.max.x); if (dx < 0f) dx = 0f;
+                float dz = Mathf.Max(b.min.z - p.z, p.z - b.max.z); if (dz < 0f) dz = 0f;
+                if (dx * dx + dz * dz > passXZmargin * passXZmargin) continue;
+                if (b.max.y > top) { top = b.max.y; over = true; }
+            }
+            if (!over) return;
+
+            float limit = top + topClearance;
+            if (p.y < limit) hoist.MoveTo(hoist.Current + (limit - p.y));   // 로컬 Y ≈ 월드 Y
+        }
+
+        // 기준점에서 grabRange 안의 가장 가까운 컨테이너(콜라이더 있으면 그것 우선)
+        Transform FindNearest(Vector3 gp, out float dist)
+        {
+            dist = float.MaxValue;
+
+            // 콜라이더 기반 우선 — grabRange 안의 콜라이더 중 크레인 외부 Rigidbody가 달린 것
+            var hits = Physics.OverlapSphere(gp, grabRange);
+            foreach (var h in hits)
+            {
+                var rb = h.attachedRigidbody;
+                if (rb != null && !rb.transform.IsChildOf(transform)) { dist = 0f; return rb.transform; }
+            }
+
+            // 렌더러 바운즈 최근접(콜라이더를 못 맞춘 경우)
+            Transform best = null;
+            foreach (var rb in bodies)
+            {
+                if (rb == null || rb.transform.IsChildOf(transform)) continue;
+                if (!TryBounds(rb.transform, out Bounds b)) continue;
+                float d = Vector3.Distance(gp, b.ClosestPoint(gp));   // 바운즈 표면까지 거리
+                if (d <= grabRange && d < dist) { dist = d; best = rb.transform; }
+            }
+            return best;
+        }
+
+        // 자식 Renderer들의 월드 AABB(콜라이더 없음 대응)
+        static bool TryBounds(Transform t, out Bounds b)
+        {
+            b = default;
+            var rends = t.GetComponentsInChildren<Renderer>();
+            if (rends == null || rends.Length == 0) return false;
+            b = rends[0].bounds;
+            for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
+            return true;
+        }
+    }
+}

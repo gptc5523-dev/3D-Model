@@ -17,7 +17,7 @@ namespace ContainerProject.EditorTools
         const string MatFrame   = MatDir + "/Container_Frame.mat";
         const string MatCasting = MatDir + "/Container_Castings.mat";
 
-        [MenuItem("Container/Export FBX")]
+        // [MenuItem("Container/Export FBX")]   // 메뉴 숨김(사용자 요청) — 복구하려면 주석 해제
         public static void ExportFbx()
         {
             string path = EditorUtility.SaveFilePanel(
@@ -74,7 +74,7 @@ namespace ContainerProject.EditorTools
             }
         }
 
-        [MenuItem("Container/Export All FBX")]
+        // [MenuItem("Container/Export All FBX")]   // 메뉴 숨김(사용자 요청) — 복구하려면 주석 해제
         public static void ExportAllFbx()
         {
             string desktop = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop);

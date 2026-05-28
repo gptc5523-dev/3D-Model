@@ -20,8 +20,10 @@ namespace Container.Crane.Sts.EditorTools
     /// 격자 붐, A-프레임 정상, 포어/백 스테이, 기계실, 트롤리·스프레더)을 흉내낸다.
     /// 치수는 1/24 미니어처(컨테이너와 비례)에 맞춘 기본값.
     ///
-    /// ※ 트롤리/스프레더는 무버 컴포넌트로 분리돼 "움직일 수 있게" 설계만 돼 있고,
-    ///   이들을 구동하는 입력/애니메이션 드라이버는 아직 없다(정지 상태로 생성됨).
+    /// 트롤리/스프레더는 무버 컴포넌트로 분리돼 있고, 루트에 자동 사이클(StsCraneOperator)·
+    /// VR 수동 조종(StsCraneVRController)·컨테이너 집기(SpreaderGrabber) 드라이버가 함께 붙는다.
+    ///
+    /// ※ 보류(미사용)된 디테일 형상 블록은 같은 폴더의 DEFERRED_DETAILS.md 에 백업돼 있다.
     /// </summary>
     public static class StsCraneCreator
     {
@@ -33,15 +35,19 @@ namespace Container.Crane.Sts.EditorTools
         const float TrolleyRestX =  8f  * Scale;   // ≈  0.333m
 
         // 높이/치수
-        const float RailH    = 18f  * Scale;       // 붐(트롤리 레일) 높이 = 다리 높이 ≈ 0.75m
+        const float RailH    = 20f  * Scale;       // 붐(트롤리 레일) 높이 = 다리 높이 ≈ 0.833m (18→20 소폭 상향)
         const float ApexH    = 11f  * Scale;       // A-프레임 정상이 붐 위로 솟은 높이 — 더 높게
-        const float GaugeZ   = 12f  * Scale;       // 레일 게이지(좌우 다리 간격, Z) — 6→12(0.5), 컨테이너+트럭 통과 클리어런스
+        const float GaugeZ   = 16f  * Scale;       // 레일 게이지(좌우 다리 간격, Z) — 40ft(12.192/24=0.508m) 길이 + 스프레더 양끝 클리어런스 수용 (12→16, 0.667m)
         const float LegSpanX = 9f   * Scale;       // 육지/바다 다리 간격(X) — 6→9(0.375), 옆 프로파일 1:2(Brace·실빔 함께)
         const float LegSec   = 0.6f * Scale;       // 다리 단면 한 변
-        const float GirderZ  = 4f   * Scale;       // 붐 거더 폭(Z) — 1.2→4, 넓은 게이지와 균형(트롤리·캣워크 함께 넓어짐)
+        // 트윈(더블 박스) 거더 — 두 박스 거더를 z=±GirderGapZ에 두고 사이를 횡프레임·평면 대각으로 결속.
+        const float GirderGapZ   = 0.16f;                          // 각 거더 중심 Z — 붐 바깥 끝쪽까지 넓게(다리 게이지 ±0.333 안쪽)
+        const float GirderWidthZ = 0.045f;                         // 각 박스 거더 단면 폭(Z)
+        const float GirderOuterZ = GirderGapZ + GirderWidthZ * 0.5f;// 트윈 거더 바깥 가장자리(캣워크 난간 위치)
 
         // 붐 거더 X 끝점 — 거더/레일/격자/스테이가 공유(한 군데서 길이 관리)
-        const float BoomBackX = TrolleyMinX - 0.27f;   // 백리치(육지쪽) 끝 — 0.20→0.27 추가 연장
+        const float BoomBackExtra = 0.12f;             // 거더 백리치를 기계실 뒤로 더 연장(백스테이가 거더 뒤끝에 물리게). 기계실은 따라 안 움직임.
+        const float BoomBackX = TrolleyMinX - 0.27f - BoomBackExtra;   // 백리치(육지쪽) 끝 — 거더만 BoomBackExtra만큼 더 뒤로
         const float BoomTipX  = TrolleyMaxX + 0.1f;    // 아웃리치 끝 — 트롤리 끝 + 팁 구조 여유(트롤리가 거의 끝까지)
 
         // 다리 X 위치(붐 로컬 = 루트 로컬, 붐이 루트 x=0에 있으므로 동일)
@@ -52,6 +58,10 @@ namespace Container.Crane.Sts.EditorTools
         const float SpreaderMaxY  = -3f  * Scale;           // 완전 상승 = 헤드블록이 트롤리 바로 아래 도킹(붐에 안 박히게)
         const float SpreaderMinY  = -(RailH - 0.8f * Scale); // 지면 직전(붐 높이에 연동)
         const float SpreaderRestY = -10f * Scale;
+
+        // 스프레더 텔레스코픽 반길이(로컬 X, m). 중앙부는 항상 20ft, 좌/우 암이 사이즈별로 슬라이드.
+        const float SpreaderHalf20 = 0.126f;   // 20ft (6.058/24/2 ≈ 0.1262)
+        const float SpreaderHalf40 = 0.254f;   // 40ft (12.192/24/2 = 0.254)
 
         // 색
         static readonly Color CStruct  = new Color(0.82f, 0.83f, 0.85f); // 다리/포털/거더
@@ -76,7 +86,13 @@ namespace Container.Crane.Sts.EditorTools
         static Mesh _beveledCube;
 
         [MenuItem("Container/Create STS Crane")]
-        public static void CreateFromMenu()
+        public static void CreateFromMenu40ft() => CreateAtContainer(SpreaderHalf40);
+
+        // [MenuItem("Container/Create STS Crane 20ft")]   // 메뉴 숨김(사용자 요청, 일단) — 40ft 크레인이 텔레스코픽으로 20ft 커버
+        public static void CreateFromMenu20ft() => CreateAtContainer(SpreaderHalf20);
+
+        // 컨테이너 위치에 지정 스프레더 사이즈(반길이)로 생성 — 기존 인스턴스는 교체.
+        static void CreateAtContainer(float spreaderHalf)
         {
             // 중복 방지 — 기존 인스턴스 제거(Undo 가능)
             var prev = GameObject.Find(RootName);
@@ -86,7 +102,7 @@ namespace Container.Crane.Sts.EditorTools
             Vector3 anchor = FindContainerAnchor();
             Vector3 pos = anchor - new Vector3(TrolleyRestX, 0f, 0f);
 
-            var root = Create(pos);
+            var root = Create(pos, spreaderHalf);
             Selection.activeGameObject = root;
             var sv = SceneView.lastActiveSceneView;
             if (sv != null) sv.FrameSelected();
@@ -96,7 +112,7 @@ namespace Container.Crane.Sts.EditorTools
         /// hierarchy를 생성해서 root GameObject를 반환. 다른 에디터/런타임 코드에서도 호출 가능.
         /// Undo 시스템에 등록 → Ctrl+Z 한 번으로 되돌릴 수 있음.
         /// </summary>
-        public static GameObject Create(Vector3 worldPosition)
+        public static GameObject Create(Vector3 worldPosition, float spreaderHalf = SpreaderHalf40)
         {
             _matCache = new Dictionary<Color, Material>();
             _steelTex = null;
@@ -131,11 +147,14 @@ namespace Container.Crane.Sts.EditorTools
 
             var spreader = new GameObject("Spreader");
             spreader.transform.SetParent(spreaderRoot.transform, worldPositionStays: false);
-            BuildSpreaderVisual(spreader.transform);
+            BuildSpreaderVisual(spreader.transform, spreaderHalf);
+            spreader.AddComponent<SpreaderLockAnimator>();   // 트위스트락 잠금 모션
 
             var attachPoint = new GameObject("AttachPoint");
             attachPoint.transform.SetParent(spreader.transform, worldPositionStays: false);
-            attachPoint.transform.localPosition = new Vector3(0f, -0.01f, 0f);
+            // 컨테이너 윗면이 여기에 정렬됨(SpreaderGrabber.Grab). 스프레더 본체 최하단(하단 Beam_Flange 밑면 ≈ -0.019)에
+            // 맞춰야 빔·플랜지가 컨테이너 위에 얹히고 트위스트락만 코너 캐스팅으로 삽입된다. (-0.01이면 플랜지가 컨테이너에 묻힘)
+            attachPoint.transform.localPosition = new Vector3(0f, -0.019f, 0f);
 
             // 호이스트 로프 — HoistRopeRig가 매 프레임 스프레더 Y에 맞춰 신축
             BuildHoistRopes(spreaderRoot.transform, spreader.transform);
@@ -162,6 +181,8 @@ namespace Container.Crane.Sts.EditorTools
             root.AddComponent<StsCraneOperator>();
             // VR 컨트롤러 수동 조종 — 켜지면 자동 사이클을 끄고 스틱/트리거로 직접 조종
             root.AddComponent<StsCraneVRController>();
+            // 컨테이너 집기/놓기 + 통과 방지(콜라이더 없는 컨테이너 대응)
+            root.AddComponent<SpreaderGrabber>();
 
             _matCache = null;
             _steelTex = null;   // 텍스처는 머티리얼이 참조 유지 → 캐시 핸들만 해제
@@ -220,38 +241,25 @@ namespace Container.Crane.Sts.EditorTools
                     new Vector3(LegSec * 0.8f, LegSec * 0.8f, GaugeZ + LegSec), CStruct);
             }
 
-            // 측면 대각 브레이스(앞/뒤 다리 사이) — X 패턴
+            // 측면 대각 브레이스(앞/뒤 다리 사이) — Sill_Beam(RailH*0.4)을 하현재로 그 위에 X 패턴
             for (int s = -1; s <= 1; s += 2)
             {
                 float z = s * halfZ;
                 Strut(root, "Brace",
-                    new Vector3(LandLegX, RailH * 0.12f, z),
+                    new Vector3(LandLegX, RailH * 0.4f, z),
                     new Vector3(WaterLegX, RailH * 0.92f, z), 0.010f, CStruct);
                 Strut(root, "Brace",
-                    new Vector3(WaterLegX, RailH * 0.12f, z),
+                    new Vector3(WaterLegX, RailH * 0.4f, z),
                     new Vector3(LandLegX, RailH * 0.92f, z), 0.010f, CStruct);
             }
 
-            // 실 빔 — 같은 쪽 두 다리(육지·바다)를 잇는 하부 종방향 빔
+            // 실 빔 — 같은 쪽 두 다리(육지·바다)를 잇는 종방향 빔(다리 중간보다 약간 아래 높이)
             for (int s = -1; s <= 1; s += 2)
             {
                 Box(root, "Sill_Beam",
-                    new Vector3((LandLegX + WaterLegX) * 0.5f, 0.075f, s * halfZ),
+                    new Vector3((LandLegX + WaterLegX) * 0.5f, RailH * 0.4f, s * halfZ),
                     new Vector3(LegSpanX + LegSec, 0.02f, LegSec * 0.9f), CStruct);
             }
-
-            // 포털 횡방향(Z) X-브레이스 — 좌우(port/star) 다리 사이. 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-            /*
-            foreach (float x in legX)
-            {
-                Strut(root, "Portal_Brace",
-                    new Vector3(x, RailH * 0.12f, -halfZ),
-                    new Vector3(x, RailH * 0.55f,  halfZ), 0.008f, CStruct);
-                Strut(root, "Portal_Brace",
-                    new Vector3(x, RailH * 0.12f,  halfZ),
-                    new Vector3(x, RailH * 0.55f, -halfZ), 0.008f, CStruct);
-            }
-            */
 
             // ── 전체 디테일 보강 (베이스/다리) ──
             foreach (float x in legX)
@@ -262,9 +270,6 @@ namespace Container.Crane.Sts.EditorTools
                     // 다리 베이스 받침 플레이트
                     Box(root, "Leg_BasePlate", new Vector3(x, 0.066f, lz),
                         new Vector3(LegSec * 2.4f, 0.012f, LegSec * 2.0f), CStruct);
-                    // 다리 상단 작업등 — 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-                    // Box(root, "Leg_Floodlight", new Vector3(x, RailH - 0.04f, lz + s * LegSec * 1.3f),
-                    //     new Vector3(0.016f, 0.012f, 0.012f), CDark);
                 }
             }
             // 도관/케이블 번들 — 육지쪽 다리 따라 지면→붐, 클램프 고정 + 상·하 정션 박스
@@ -308,24 +313,6 @@ namespace Container.Crane.Sts.EditorTools
                             new Vector3(LegSec * 1.1f, 0.01f, 0.006f), CDark);
                 }
             }
-            // 레일 끝 완충 버퍼(각 주행레일 Z 양 끝, 적색) — 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-            /*
-            float railLenB = GaugeZ + 0.30f;
-            foreach (float x in legX)
-            for (int e = -1; e <= 1; e += 2)
-            {
-                Box(root, "Rail_Buffer",
-                    new Vector3(x, 0.02f, e * railLenB * 0.5f),
-                    new Vector3(0.03f, 0.03f, 0.018f), CWarn);
-            }
-            */
-            // 충돌방지 센서 — 주행방향(Z) 양끝을 향함(옆 크레인 감지)
-            for (int s = -1; s <= 1; s += 2)
-            {
-                Box(root, "AntiCollision_Sensor",
-                    new Vector3(WaterLegX, RailH * 0.5f, s * (halfZ + 0.02f)),
-                    new Vector3(0.014f, 0.02f, 0.014f), CDark);
-            }
         }
 
         // 붐: 메인 거더 + 주행 레일 + 격자 대각 + 기계실 (붐 로컬 좌표)
@@ -336,69 +323,53 @@ namespace Container.Crane.Sts.EditorTools
             float len = x1 - x0;
             float mid = (x0 + x1) * 0.5f;
 
-            // 메인 거더
-            Box(boom, "Boom_Girder", new Vector3(mid, 0.04f, 0f),
-                new Vector3(len, 0.05f, GirderZ), CBoom);
-            // 트롤리 주행 레일(거더 하단)
-            Box(boom, "Boom_Rail", new Vector3(mid, 0.006f, 0f),
-                new Vector3(len, 0.012f, GirderZ * 0.7f), CRail);
-
-            // 거더 끝단/모서리 마감 — 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-            /*
-            foreach (float ex in new[] { x0, x1 })
-            {
-                // 뚫린 듯한 끝을 덮는 플랜지 캡(단면보다 살짝 큼)
-                Box(boom, "Boom_EndCap", new Vector3(ex, 0.04f, 0f),
-                    new Vector3(0.01f, 0.064f, GirderZ + 0.016f), CStruct);
-                // 캡 상·하 보강 립
-                for (int sy = -1; sy <= 1; sy += 2)
-                    Box(boom, "Boom_EndRib", new Vector3(ex, 0.04f + sy * 0.026f, 0f),
-                        new Vector3(0.014f, 0.008f, GirderZ + 0.02f), CStruct);
-            }
-            // 상단 양 모서리 엣지 트림(날카로운 박스 모서리 마감)
-            for (int s = -1; s <= 1; s += 2)
-                Box(boom, "Girder_EdgeTrim", new Vector3(mid, 0.065f, s * GirderZ * 0.5f),
-                    new Vector3(len, 0.006f, 0.006f), CStruct);
-            */
-
-            // 격자 대각 — 양옆(±Z) 대칭 지그재그
-            int seg = 10;
-            float step = len / seg;
+            // ── 트윈(더블 박스) 거더 — 두 박스 거더(z=±GirderGapZ) + 거더별 하단 주행 레일 ──
+            const float gY = 0.04f, gH = 0.05f;        // 거더 중심 높이 / 단면 높이
+            float gTop = gY + gH * 0.5f;               // 거더 윗면(=0.065)
+            float gBot = gY - gH * 0.5f;               // 거더 밑면(=0.015)
             for (int s = -1; s <= 1; s += 2)
             {
-                float z = s * GirderZ * 0.48f;
-                for (int i = 0; i < seg; i++)
-                {
-                    float xa = x0 + step * i;
-                    float xb = x0 + step * (i + 1);
-                    bool up = (i % 2) == 0;
-                    Strut(boom, "Boom_Lattice",
-                        new Vector3(xa, up ? 0.005f : 0.075f, z),
-                        new Vector3(xb, up ? 0.075f : 0.005f, z),
-                        0.005f, CStruct);
-                }
-                // 하부 종방향 코드(바닥 격자 느낌)
-                Box(boom, "Boom_Chord", new Vector3(mid, 0.012f, z),
-                    new Vector3(len, 0.008f, 0.008f), CStruct);
+                float gz = s * GirderGapZ;
+                Box(boom, "Boom_Girder", new Vector3(mid, gY, gz),
+                    new Vector3(len, gH, GirderWidthZ), CBoom);
+                // 트롤리 주행 레일(거더 하단)
+                Box(boom, "Boom_Rail", new Vector3(mid, 0.006f, gz),
+                    new Vector3(len, 0.012f, GirderWidthZ * 0.8f), CRail);
             }
 
-            // 횡방향 프레임 — 상하 코드를 잇는 수직재 + 바닥 횡재(박스 트러스 느낌)
-            int frames = 9;
+            // ── 두 거더 결속: 횡프레임(상·하 횡재 + 거더별 수직재) ──
+            int frames = 11;
+            float crossBot = gBot + 0.004f, crossTop = gTop - 0.004f;
             for (int i = 0; i <= frames; i++)
             {
                 float fx = Mathf.Lerp(x0, x1, i / (float)frames);
+                Box(boom, "Boom_Cross", new Vector3(fx, crossBot, 0f),
+                    new Vector3(0.006f, 0.006f, 2f * GirderGapZ), CStruct);
+                Box(boom, "Boom_Cross", new Vector3(fx, crossTop, 0f),
+                    new Vector3(0.006f, 0.006f, 2f * GirderGapZ), CStruct);
                 for (int s = -1; s <= 1; s += 2)
-                {
-                    Box(boom, "Boom_Vertical", new Vector3(fx, 0.035f, s * GirderZ * 0.48f),
-                        new Vector3(0.006f, 0.055f, 0.006f), CStruct);
-                }
-                Box(boom, "Boom_Cross", new Vector3(fx, 0.009f, 0f),
-                    new Vector3(0.006f, 0.006f, GirderZ), CStruct);
+                    Box(boom, "Boom_Vertical", new Vector3(fx, gY, s * GirderGapZ),
+                        new Vector3(0.006f, gH, 0.006f), CStruct);
+            }
+
+            // ── 두 거더 사이 평면 대각 브레이스(바닥면 X 지그재그) — 비틀림 강성 표현 ──
+            int dseg = 11;
+            float dstep = len / dseg;
+            for (int i = 0; i < dseg; i++)
+            {
+                float xa = x0 + dstep * i;
+                float xb = x0 + dstep * (i + 1);
+                bool up = (i % 2) == 0;
+                Strut(boom, "Boom_Plan_Brace",
+                    new Vector3(xa, crossBot, up ? -GirderGapZ : GirderGapZ),
+                    new Vector3(xb, crossBot, up ?  GirderGapZ : -GirderGapZ),
+                    0.004f, CStruct);
             }
 
             // 기계실(육지쪽 위) + 디테일 — 붐 가로(Z)로 넓혀 육중하게(거더보다 양옆 돌출)
-            float mhx = x0 + 0.11f;
-            float mhZ = GirderZ * 1.5f;   // Z 폭 — 붐 기준(붐보다 약간 넓게 오버행), 게이지 변화에 안 휩쓸리게
+            // ※ 기계실은 고정 — 거더만 BoomBackExtra만큼 뒤로 빠지므로, mhx는 연장 전 백리치 기준으로 고정
+            float mhx = (x0 + BoomBackExtra) + 0.11f;
+            float mhZ = 2f * GirderGapZ + 0.08f;   // Z 폭 — 트윈 거더(±GirderGapZ)를 가로질러 얹히게 넓힘(거더 바깥으로 약간 오버행)
             float mhHZ = mhZ * 0.5f;       // Z 반폭
             float mhHX = 0.085f;           // X 반폭(0.17의 절반)
             Box(boom, "Machinery_House", new Vector3(mhx, 0.105f, 0f),
@@ -445,12 +416,7 @@ namespace Container.Crane.Sts.EditorTools
                     Box(boom, "MH_Mullion", new Vector3(mhx + 0.01f + m * 0.015f, 0.118f, fz),
                         new Vector3(0.004f, 0.03f, 0.004f), CStruct);
             }
-            // 보조 E-house — 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-            /*
-            Box(boom, "E_House", new Vector3(mhx + 0.12f, 0.085f, 0f),
-                new Vector3(0.07f, 0.06f, GirderZ * 1.1f), CMachine);
-            */
-            Box(boom, "Cable_Tray", new Vector3(mhx + 0.18f, 0.05f, GirderZ * 0.5f),
+            Box(boom, "Cable_Tray", new Vector3(mhx + 0.18f, 0.05f, GirderGapZ),
                 new Vector3(0.35f, 0.006f, 0.008f), CDark);
             Rod(boom, "Boom_Hoist_Drum",
                 new Vector3(mhx - 0.06f, 0.04f, -0.03f),
@@ -593,18 +559,21 @@ namespace Container.Crane.Sts.EditorTools
                     new Vector3(0.009f, 0.006f, 0.009f), CLight);
             }
 
-            // 붐 상단 양옆 난간(walkway railing) — 거더 윗면 가장자리
+            // 붐 상단 양옆 난간(walkway railing) — 트윈 거더 바깥 가장자리
             float girderTop = 0.065f;   // 거더 윗면
             float railTop   = 0.105f;   // 상단 가로 레일 높이
             int posts = 7;
             for (int s = -1; s <= 1; s += 2)
             {
-                float z = s * GirderZ * 0.5f;
+                float z = s * GirderOuterZ;
                 Box(boom, "Boom_Railing", new Vector3(mid, railTop, z),
                     new Vector3(len, 0.006f, 0.006f), CStruct);
                 // 중간 가로대
                 Box(boom, "Boom_Railing_Mid", new Vector3(mid, (railTop + girderTop) * 0.5f, z),
                     new Vector3(len, 0.004f, 0.004f), CStruct);
+                // 토보드(킥플레이트) — 보도 가장자리
+                Box(boom, "Boom_Toe", new Vector3(mid, girderTop + 0.009f, z),
+                    new Vector3(len, 0.012f, 0.003f), CStruct);
                 for (int i = 0; i <= posts; i++)
                 {
                     float px = Mathf.Lerp(x0, x1, i / (float)posts);
@@ -619,6 +588,7 @@ namespace Container.Crane.Sts.EditorTools
         static void BuildApexAndStays(Transform root)
         {
             float halfZ = GaugeZ * 0.5f;
+            float apexHalfZ = GaugeZ * 0.35f;   // 정상 가로보(Apex, 폭 GaugeZ*0.7) 끝=A-프레임 다리가 물리는 코너
             Vector3 apex = new Vector3(WaterLegX, RailH + ApexH, 0f);
 
             // 정상 가로보
@@ -708,13 +678,15 @@ namespace Container.Crane.Sts.EditorTools
                 Ball(root, "Anemo_Cup", cupP, new Vector3(0.005f, 0.005f, 0.005f), CStruct);
             }
 
-            // A-프레임 다리 4개 (정상 → 다리 상단)
+            // A-프레임 다리 4개 — 같은 쪽 정상 코너(±apexHalfZ)에서 같은 쪽 다리 상단으로 물림
+            // → port/star 두 개의 A가 정상 가로보로 묶이는 형상(한 점 수렴 아님)
             foreach (float lx in new[] { LandLegX, WaterLegX })
             {
                 for (int s = -1; s <= 1; s += 2)
                 {
                     Strut(root, "Aframe",
-                        apex, new Vector3(lx, RailH, s * halfZ), 0.012f, CStruct);
+                        new Vector3(apex.x, apex.y, s * apexHalfZ),
+                        new Vector3(lx, RailH, s * halfZ), 0.012f, CStruct);
                 }
             }
 
@@ -726,19 +698,17 @@ namespace Container.Crane.Sts.EditorTools
                 {
                     float bx = Mathf.Lerp(WaterLegX, legX, t);
                     float by = Mathf.Lerp(apex.y, RailH, t);
+                    // 가로 브레이스 폭 — 꼭대기(코너 ±apexHalfZ)에서 다리 베이스(±halfZ)로
                     Box(root, "Aframe_Brace", new Vector3(bx, by, 0f),
-                        new Vector3(0.007f, 0.007f, GaugeZ * t), CStruct);
+                        new Vector3(0.007f, 0.007f, 2f * Mathf.Lerp(apexHalfZ, halfZ, t)), CStruct);
                 }
-                for (int i = 0; i < lv.Length - 1; i++)
-                {
-                    float t0 = lv[i], t1 = lv[i + 1];
-                    float x0 = Mathf.Lerp(WaterLegX, legX, t0), x1 = Mathf.Lerp(WaterLegX, legX, t1);
-                    float y0 = Mathf.Lerp(apex.y, RailH, t0), y1 = Mathf.Lerp(apex.y, RailH, t1);
-                    Strut(root, "Aframe_Lace",
-                        new Vector3(x0, y0, -halfZ * t0), new Vector3(x1, y1, halfZ * t1), 0.006f, CStruct);
-                    Strut(root, "Aframe_Lace",
-                        new Vector3(x0, y0, halfZ * t0), new Vector3(x1, y1, -halfZ * t1), 0.006f, CStruct);
-                }
+                // 큰 X 하나 — 면의 꼭대기 코너(±apexHalfZ)에서 다리 베이스 반대편(±halfZ)으로 교차(지그재그 제거)
+                Vector3 tN = new Vector3(apex.x, apex.y, -apexHalfZ);
+                Vector3 tP = new Vector3(apex.x, apex.y,  apexHalfZ);
+                Vector3 bN = new Vector3(legX, RailH, -halfZ);
+                Vector3 bP = new Vector3(legX, RailH,  halfZ);
+                Strut(root, "Aframe_Lace", tN, bP, 0.008f, CStruct);
+                Strut(root, "Aframe_Lace", tP, bN, 0.008f, CStruct);
             }
 
             // A-프레임 측면(port/star) 가로 브레이스 — 바다·육지 다리쌍 연결
@@ -746,28 +716,25 @@ namespace Container.Crane.Sts.EditorTools
             {
                 float lx = Mathf.Lerp(WaterLegX, LandLegX, t);
                 float yy = Mathf.Lerp(apex.y, RailH, t);
+                float sz = Mathf.Lerp(apexHalfZ, halfZ, t);   // 다리의 안쪽 기울기에 맞춤(코너→베이스)
                 for (int s = -1; s <= 1; s += 2)
                 {
                     Box(root, "Aframe_SideBrace",
-                        new Vector3((WaterLegX + lx) * 0.5f, yy, s * halfZ * t),
+                        new Vector3((WaterLegX + lx) * 0.5f, yy, s * sz),
                         new Vector3(Mathf.Abs(WaterLegX - lx), 0.006f, 0.006f), CStruct);
                 }
             }
 
-            // 정상 정비용 데빗(소형 지브) — 튀어나와 보여 일단 보류(주석). 나중에 끝단 후크 등 달아 복구.
-            // Box(root, "Davit_Mast", new Vector3(apex.x - 0.03f, apex.y + 0.025f, halfZ * 0.4f),
-            //     new Vector3(0.005f, 0.05f, 0.005f), CStruct);
-            // Box(root, "Davit_Arm", new Vector3(apex.x - 0.05f, apex.y + 0.045f, halfZ * 0.4f),
-            //     new Vector3(0.05f, 0.005f, 0.005f), CStruct);
-
-            // 정상 시브 네스트(스테이 도르래) + 장비 하우징
+            // 정상 시브 네스트(스테이 도르래) + 장비 하우징 — 시브를 감싸게 거더 폭에 맞춤
             Box(root, "Apex_SheaveHouse", new Vector3(apex.x, apex.y - 0.025f, 0f),
-                new Vector3(0.03f, 0.05f, GaugeZ * 0.5f), CMachine);
-            for (int w = -1; w <= 1; w += 2)
+                new Vector3(0.03f, 0.05f, 2f * GirderGapZ + 0.08f), CMachine);
+            // 정상 시브 — 양쪽(z=±GirderGapZ)에 1개씩, 각 거더 포어스테이를 받음(축은 Z)
+            for (int s = -1; s <= 1; s += 2)
             {
+                float sz = s * GirderGapZ;
                 Rod(root, "Apex_Sheave",
-                    new Vector3(apex.x + w * 0.012f, apex.y - 0.01f, -0.016f),
-                    new Vector3(apex.x + w * 0.012f, apex.y - 0.01f,  0.016f), 0.016f, CDark);
+                    new Vector3(apex.x, apex.y - 0.01f, sz - 0.016f),
+                    new Vector3(apex.x, apex.y - 0.01f, sz + 0.016f), 0.016f, CDark);
             }
             // 시브 하우스 디테일 — 측면 리브 + 점검 해치 + 리프팅 러그
             for (int s = -1; s <= 1; s += 2)
@@ -799,17 +766,19 @@ namespace Container.Crane.Sts.EditorTools
                     new Vector3(0.011f, 0.009f, 0.011f), CLight);
             }
 
-            // 정상 접근 사다리 — 육지측 A-프레임 다리(+Z)를 따라 경사지게, 구조물 바깥으로 오프셋(박힘 방지)
-            Vector3 aTop = Vector3.Lerp(new Vector3(LandLegX, RailH, halfZ), apex, 0.9f);
-            Vector3 aBot = new Vector3(LandLegX, RailH, halfZ);
-            BuildInclinedLadder(root, aTop, aBot, 0.028f, new Vector3(0f, 0f, 0.022f));
+            // 정상 접근 사다리 숨김(사용자 요청) — 복구하려면 주석 해제
+            // Vector3 aTop = Vector3.Lerp(new Vector3(LandLegX, RailH, halfZ), apex, 0.9f);
+            // Vector3 aBot = new Vector3(LandLegX, RailH, halfZ);
+            // BuildInclinedLadder(root, aTop, aBot, 0.028f, new Vector3(0f, 0f, 0.022f));
 
-            // 스테이 케이블 — 부채꼴 + 앵커 플레이트·턴버클
+            // 스테이 케이블 — 부채꼴 + 앵커 플레이트·턴버클. 측면 시브(z=±GirderGapZ)에서 같은 쪽 거더로 내림(측면별 수직면).
             float boomTopY = RailH + 0.07f;
-            foreach (float f in new[] { 0.35f, 0.55f, 0.78f, 1.0f })   // 바다쪽 4줄
+            for (int s = -1; s <= 1; s += 2)
             {
-                BuildStay(root, apex,
-                    new Vector3(Mathf.Lerp(WaterLegX, BoomTipX, f), boomTopY, 0f), "Forestay");
+                Vector3 sheave = new Vector3(apex.x, apex.y - 0.01f, s * GirderGapZ);
+                foreach (float f in new[] { 0.35f, 0.55f, 0.78f, 1.0f })   // 바다쪽 4줄
+                    BuildStay(root, sheave,
+                        new Vector3(Mathf.Lerp(WaterLegX, BoomTipX, f), boomTopY, s * GirderGapZ), "Forestay");
             }
             // 백스테이 — 기계실에 박히던 문제 수정: 앵커를 기계실 지붕 뒤쪽-상단으로 올려
             //   케이블이 기계실 위로 지나가 지붕 뒤에 고정되게 함(실제 크레인도 후방 상단에 물림).
@@ -833,12 +802,24 @@ namespace Container.Crane.Sts.EditorTools
 
         static void BuildTrolleyVisual(Transform trolley)
         {
-            // 트롤리는 붐 레일(붐 로컬 y=0)에 위치. 본체는 그 아래로.
+            // 트롤리는 붐 레일(붐 로컬 y=0)에 위치. 본체는 그 아래로. 트윈 거더 두 레일에 걸침.
+            float tZ = 2f * GirderGapZ + 0.05f;   // 두 레일에 걸치는 폭(≈0.19)
             Box(trolley, "Trolley_Body", new Vector3(0f, -0.025f, 0f),
-                new Vector3(0.11f, 0.05f, GirderZ * 0.9f), CTrolley);
+                new Vector3(0.11f, 0.05f, tZ), CTrolley);
             Box(trolley, "Trolley_Head", new Vector3(0f, -0.06f, 0f),
-                new Vector3(0.07f, 0.025f, GirderZ * 0.85f), CDark);
-            // 호이스트 시브(도르래) — 로프가 도는 휠, 축은 Z. 넓어진 트롤리/로프(z±0.05)에 맞춤
+                new Vector3(0.07f, 0.025f, tZ * 0.85f), CDark);
+            // 두 레일 위 주행 대차(보기) + 바퀴 — 각 거더 레일(z=±GirderGapZ)에 올라탐
+            for (int s = -1; s <= 1; s += 2)
+            {
+                float gz = s * GirderGapZ;
+                Box(trolley, "Trolley_Bogie", new Vector3(0f, -0.006f, gz),
+                    new Vector3(0.13f, 0.016f, 0.03f), CDark);
+                for (int sx = -1; sx <= 1; sx += 2)
+                    Rod(trolley, "Trolley_Wheel",
+                        new Vector3(sx * 0.05f, 0.001f, gz - 0.013f),
+                        new Vector3(sx * 0.05f, 0.001f, gz + 0.013f), 0.011f, CRail);
+            }
+            // 호이스트 시브(도르래) — 로프가 도는 휠, 축은 Z. 수직 로프(z±0.05)에 맞춤
             for (int w = -1; w <= 1; w += 2)
             {
                 Rod(trolley, "Trolley_Sheave",
@@ -896,32 +877,26 @@ namespace Container.Crane.Sts.EditorTools
             }
         }
 
-        static void BuildSpreaderVisual(Transform spreader)
+        // 스프레더 — 중앙 고정부(항상 20ft) + 좌/우 텔레스코픽 암(끝빔 + 트위스트락).
+        // spreaderHalf(반길이)로 암 위치를 정함: 20ft=중앙 끝에 밀착, 40ft=바깥으로 신장(텔레스코핑 빔이 연결).
+        static void BuildSpreaderVisual(Transform spreader, float spreaderHalf)
         {
             // 컨테이너 긴 축이 안벽/주행 방향(Z)을 향하도록 스프레더 전체를 90° 회전
             // (부속은 긴 축=로컬 X로 배치 → Y축 90° 회전으로 월드 Z가 긴 축이 됨)
             spreader.localRotation = Quaternion.Euler(0f, 90f, 0f);
 
-            float hl = 0.126f;       // 반길이(로컬 X) — 20ft 컨테이너
-            float hw = 0.05f;        // 반폭(로컬 Z) — 컨테이너 폭 비례
-            Color CMetal = CRail;    // 트위스트락/플리퍼 회색
+            float hw = 0.05f;                  // 반폭(로컬 Z) — 컨테이너 폭 비례(20·40ft 동일)
+            const float hl0 = SpreaderHalf20;  // 중앙 고정부 반길이(항상 20ft)
+            Color CMetal = CRail;              // 트위스트락 회색
 
-            // ── 메인 스프레더 빔(박스 거더) + 상·하 플랜지 ──
+            // ── 중앙 고정부(항상 20ft) — 메인 빔 + 상·하 플랜지 ──
             Box(spreader, "Spreader_Bar", Vector3.zero,
-                new Vector3(hl * 2f, 0.028f, hw * 2f), CSpread);
+                new Vector3(hl0 * 2f, 0.028f, hw * 2f), CSpread);
             for (int sy = -1; sy <= 1; sy += 2)
                 Box(spreader, "Beam_Flange", new Vector3(0f, sy * 0.016f, 0f),
-                    new Vector3(hl * 2f, 0.006f, hw * 2f + 0.008f), CSpread);
-            // 끝단 크로스 빔(컨테이너 단부)
-            for (int sx = -1; sx <= 1; sx += 2)
-                Box(spreader, "End_Beam", new Vector3(sx * (hl - 0.008f), 0f, 0f),
-                    new Vector3(0.016f, 0.03f, hw * 2f + 0.012f), CSpread);
-            // 텔레스코핑 내부 빔(가변 흉내)
-            for (int sx = -1; sx <= 1; sx += 2)
-                Box(spreader, "Tele_Beam", new Vector3(sx * hl * 0.55f, 0f, 0f),
-                    new Vector3(hl, 0.018f, hw * 1.2f), CDark);
+                    new Vector3(hl0 * 2f, 0.006f, hw * 2f + 0.008f), CSpread);
 
-            // ── 헤드블록 — 크로스 프레임 + 시브 4개(2쌍) + 치크 플레이트 ──
+            // ── 헤드블록(중앙) — 크로스 프레임 + 시브 4개(2쌍) + 치크 플레이트 ──
             float hbY = 0.058f;
             for (int sx = -1; sx <= 1; sx += 2)
             for (int sz = -1; sz <= 1; sz += 2)
@@ -930,35 +905,15 @@ namespace Container.Crane.Sts.EditorTools
                     new Vector3(sx * 0.035f, hbY - 0.012f, sz * 0.02f), 0.006f, CSpread);
             Box(spreader, "Spreader_Head", new Vector3(0f, hbY, 0f),
                 new Vector3(0.11f, 0.026f, hw * 1.5f), CSpread);
-            // 시브 4개(2쌍) — 축 Z, X로 4열
             foreach (float hx in new[] { -0.042f, -0.018f, 0.018f, 0.042f })
                 Rod(spreader, "Head_Sheave",
                     new Vector3(hx, hbY + 0.013f, -0.026f),
                     new Vector3(hx, hbY + 0.013f,  0.026f), 0.013f, CDark);
-            // 치크 플레이트(시브 양 측면 판)
             for (int sz = -1; sz <= 1; sz += 2)
                 Box(spreader, "Head_Cheek", new Vector3(0f, hbY + 0.013f, sz * 0.03f),
                     new Vector3(0.1f, 0.028f, 0.004f), CSpread);
 
-            // ── 트위스트락 4(코너) — 회색 락헤드 + 락 콘 + 플리퍼 판 ──
-            for (int sx = -1; sx <= 1; sx += 2)
-            for (int sz = -1; sz <= 1; sz += 2)
-            {
-                Vector3 c = new Vector3(sx * (hl - 0.006f), 0f, sz * (hw - 0.006f));
-                // 코너 캐스팅 락헤드(회색 박스)
-                Box(spreader, "Twistlock_Head", c + new Vector3(0f, -0.014f, 0f),
-                    new Vector3(0.02f, 0.024f, 0.02f), CMetal);
-                // 락 콘(아래로 뾰족)
-                Cone(spreader, "Twistlock_Cone",
-                    c + new Vector3(0f, -0.036f, 0f), c + new Vector3(0f, -0.024f, 0f),
-                    0.004f, 0.009f, CMetal, 16);
-                // 플리퍼 가이드 판(코너 바깥·아래로)
-                Strut(spreader, "Flipper",
-                    c + new Vector3(sx * 0.004f, -0.006f, sz * 0.004f),
-                    c + new Vector3(sx * 0.026f, -0.05f, sz * 0.026f), 0.016f, CMetal);
-            }
-
-            // ── 부속(파워팩/정션박스/작업등) ──
+            // ── 부속(중앙) — 파워팩/정션박스/작업등 ──
             Box(spreader, "Spreader_PowerPack", new Vector3(0.07f, 0.022f, 0f),
                 new Vector3(0.04f, 0.022f, hw * 1.2f), CMachine);
             Box(spreader, "Spreader_JBox", new Vector3(-0.07f, 0.02f, 0f),
@@ -966,6 +921,47 @@ namespace Container.Crane.Sts.EditorTools
             for (int sx = -1; sx <= 1; sx += 2)
                 Ball(spreader, "Spreader_Floodlight", new Vector3(sx * 0.085f, 0.005f, 0f),
                     new Vector3(0.013f, 0.008f, 0.013f), CLight);
+
+            // ── 좌/우 텔레스코픽 암(끝빔 + 트위스트락) — 런타임에 20↔40ft 슬라이드 ──
+            // 각 암을 Transform으로 묶고 자식은 '암 로컬' 좌표(암 원점 = 끝빔 위치)로 배치 →
+            // SpreaderTelescope가 암의 로컬 X만 옮기면 끝빔·트위스트락이 통째로 슬라이드한다.
+            Transform armL = null, armR = null;
+            for (int sx = -1; sx <= 1; sx += 2)
+            {
+                var arm = new GameObject(sx < 0 ? "TeleArm_L" : "TeleArm_R");
+                arm.transform.SetParent(spreader, worldPositionStays: false);
+                arm.transform.localPosition = new Vector3(sx * spreaderHalf, 0f, 0f);
+                Transform a = arm.transform;
+                if (sx < 0) armL = a; else armR = a;
+
+                // 끝단 크로스 빔(컨테이너 단부) — 암 원점
+                Box(a, "End_Beam", new Vector3(-sx * 0.008f, 0f, 0f),
+                    new Vector3(0.016f, 0.03f, hw * 2f + 0.012f), CSpread);
+                // 트위스트락 2(앞/뒤 코너) — 회색 락헤드 + 락 콘(아래로 뾰족)
+                for (int sz = -1; sz <= 1; sz += 2)
+                {
+                    Vector3 c = new Vector3(-sx * 0.006f, 0f, sz * (hw - 0.006f));
+                    Box(a, "Twistlock_Head", c + new Vector3(0f, -0.014f, 0f),
+                        new Vector3(0.02f, 0.024f, 0.02f), CMetal);
+                    Cone(a, "Twistlock_Cone",
+                        c + new Vector3(0f, -0.036f, 0f), c + new Vector3(0f, -0.024f, 0f),
+                        0.004f, 0.009f, CMetal, 16);
+                }
+            }
+
+            // 텔레스코핑 빔(스프레더 직속) — 중앙 끝(hl0)↔암 사이를 SpreaderTelescope가 X 스케일로 신축.
+            // 20ft면 수축(거의 사라짐), 40ft면 신장. 초기 크기는 생성 사이즈 기준(에디터 표시용).
+            float initLen = Mathf.Max(0.0001f, (spreaderHalf - hl0) + 0.02f);
+            float initMid = (hl0 + spreaderHalf) * 0.5f;
+            Transform teleL = Box(spreader, "Tele_Beam", new Vector3(-initMid, 0f, 0f),
+                new Vector3(initLen, 0.018f, hw * 1.2f), CDark).transform;
+            Transform teleR = Box(spreader, "Tele_Beam", new Vector3(initMid, 0f, 0f),
+                new Vector3(initLen, 0.018f, hw * 1.2f), CDark).transform;
+
+            // 런타임 텔레스코픽 전환(시작 사이즈 = 생성 시 spreaderHalf)
+            var tele = spreader.gameObject.AddComponent<SpreaderTelescope>();
+            tele.Configure(armL, armR, teleL, teleR, hl0, SpreaderHalf20, SpreaderHalf40,
+                           spreaderHalf > hl0 + 1e-4f);
         }
 
         // 호이스트 로프 4줄 — spreaderRoot(붐 레벨 y=0) → 스프레더 헤드.
@@ -978,20 +974,23 @@ namespace Container.Crane.Sts.EditorTools
             float restBotY = SpreaderRestY + attachOffsetY;
 
             var ropes = new List<Transform>();
-            var anchors = new List<Vector2>();
+            var topAnchors = new List<Vector2>();
+            var botAnchors = new List<Vector2>();
             for (int sx = -1; sx <= 1; sx += 2)
             for (int sz = -1; sz <= 1; sz += 2)
             {
                 float x = sx * 0.03f;
-                float z = sz * 0.05f;   // 넓어진 트롤리/스프레더(Z 긴 축)에 맞춤
+                float z = sz * 0.05f;   // 스프레더 코너에 맞춘 수직 로프(부채꼴 취소 — 사용자 요청, 예전 방식)
                 var rope = Rod(spreaderRoot, "Hoist_Rope",
                     new Vector3(x, topY, z), new Vector3(x, restBotY, z), radius, CCable);
                 ropes.Add(rope.transform);
-                anchors.Add(new Vector2(x, z));
+                topAnchors.Add(new Vector2(x, z));
+                botAnchors.Add(new Vector2(x, z));
             }
-            // 매 프레임 트롤리↔스프레더 사이로 로프 신축
+            // 매 프레임 트롤리↔스프레더 사이로 로프 신축(상≠하 각진 리빙)
             var rig = spreaderRoot.gameObject.AddComponent<HoistRopeRig>();
-            rig.Configure(spreader, topY, attachOffsetY, ropes.ToArray(), anchors.ToArray(), radius);
+            rig.Configure(spreader, topY, attachOffsetY, ropes.ToArray(),
+                          topAnchors.ToArray(), botAnchors.ToArray(), radius);
         }
 
         // ───────────────────────── 디테일 지오메트리 (D) ─────────────────────────
@@ -1049,9 +1048,13 @@ namespace Container.Crane.Sts.EditorTools
             float x0 = BoomBackX, x1 = BoomTipX;
             float len = x1 - x0, mid = (x0 + x1) * 0.5f;
 
-            // 보도 그레이팅(난간 사이 바닥)
-            Box(boom, "Walkway_Deck", new Vector3(mid, 0.067f, 0f),
-                new Vector3(len, 0.004f, GirderZ), CMachine);
+            // 보도 그레이팅 — 거더 위 2장 + 가운데(Boom_Vertical/브레이스 위) 1장으로 상단 전체를 막음(연속 보도, 패널 이음새 유지)
+            for (int s = -1; s <= 1; s += 2)
+                Box(boom, "Walkway_Deck", new Vector3(mid, 0.067f, s * GirderGapZ),
+                    new Vector3(len, 0.004f, 0.05f), CMachine);
+            // 중앙 보도 숨김(사용자 요청) — 복구하려면 주석 해제
+            // Box(boom, "Walkway_Deck_Mid", new Vector3(mid, 0.067f, 0f),
+            //     new Vector3(len, 0.004f, 2f * (GirderGapZ - 0.025f)), CMachine);
 
             // 끝단 시브(도르래) — 로프가 도는 휠, 축은 Z
             Rod(boom, "Sheave_Tip",
@@ -1063,7 +1066,7 @@ namespace Container.Crane.Sts.EditorTools
             {
                 for (int s = -1; s <= 1; s += 2)
                 {
-                    float z = s * GirderZ * 0.45f;
+                    float z = s * GirderGapZ;
                     Box(boom, "Floodlight_Housing", new Vector3(lx, -0.008f, z),
                         new Vector3(0.018f, 0.014f, 0.018f), CDark);
                     Ball(boom, "Floodlight_Lens", new Vector3(lx, -0.018f, z),
@@ -1072,18 +1075,32 @@ namespace Container.Crane.Sts.EditorTools
             }
 
             // 끝단 플랫폼 + 추가 시브 + 항해등
+            // 끝단 플랫폼 — 트윈 거더 전폭으로(좁던 것 수정) + 둘레 안전 난간
             Box(boom, "Tip_Platform", new Vector3(x1 - 0.04f, 0.066f, 0f),
-                new Vector3(0.08f, 0.004f, GirderZ * 1.0f), CMachine);
+                new Vector3(0.08f, 0.004f, 2f * GirderOuterZ), CMachine);
+            {
+                float tpY0 = 0.068f, tpRailY = 0.102f;
+                float tpX0 = x1 - 0.08f, tpX1 = x1, tpHZ = GirderOuterZ;
+                for (int s = -1; s <= 1; s += 2)   // ±Z 옆 난간
+                    Box(boom, "Tip_Rail", new Vector3((tpX0 + tpX1) * 0.5f, tpRailY, s * tpHZ),
+                        new Vector3(tpX1 - tpX0, 0.005f, 0.005f), CStruct);
+                Box(boom, "Tip_Rail", new Vector3(tpX1, tpRailY, 0f),   // 바다쪽 끝 난간
+                    new Vector3(0.005f, 0.005f, tpHZ * 2f), CStruct);
+                foreach (float pz in new[] { -tpHZ, 0f, tpHZ })        // 기둥(끝 코너+중앙)
+                    Box(boom, "Tip_Rail_Post", new Vector3(tpX1, (tpY0 + tpRailY) * 0.5f, pz),
+                        new Vector3(0.005f, tpRailY - tpY0, 0.005f), CStruct);
+            }
             Rod(boom, "Sheave_Tip2",
                 new Vector3(x1 - 0.05f, 0.03f, -0.04f),
                 new Vector3(x1 - 0.05f, 0.03f,  0.04f), 0.018f, CDark);
-            Ball(boom, "Nav_Light", new Vector3(x1 - 0.003f, 0.05f, 0f),
-                new Vector3(0.012f, 0.016f, 0.012f), CWarn);
+            // 항해등 숨김(사용자 요청) — 복구하려면 주석 해제
+            // Ball(boom, "Nav_Light", new Vector3(x1 - 0.003f, 0.05f, 0f),
+            //     new Vector3(0.012f, 0.016f, 0.012f), CWarn);
 
             // 하부 점검 캣워크(양옆) + 난간(상단·중간대 + 기둥)
             for (int s = -1; s <= 1; s += 2)
             {
-                float cz = s * (GirderZ * 0.5f + 0.014f);
+                float cz = s * (GirderOuterZ + 0.012f);
                 float railZ = cz + s * 0.009f;
                 Box(boom, "Catwalk", new Vector3(mid, 0f, cz),
                     new Vector3(len, 0.004f, 0.022f), CMachine);
@@ -1101,7 +1118,7 @@ namespace Container.Crane.Sts.EditorTools
             }
 
             // 페스툰(전력·제어 케이블) — 붐 하부 트랙 + 늘어진 케이블 다발
-            float festZ = GirderZ * 0.5f + 0.006f;
+            float festZ = GirderOuterZ + 0.008f;
             Box(boom, "Festoon_Track", new Vector3(mid, -0.006f, festZ),
                 new Vector3(len, 0.004f, 0.004f), CDark);
             int loops = 12;
@@ -1117,27 +1134,28 @@ namespace Container.Crane.Sts.EditorTools
             for (int i = 0; i < 3; i++)
             {
                 Box(boom, "Counterweight", new Vector3(x0 + 0.05f, -0.05f + i * 0.022f, 0f),
-                    new Vector3(0.09f, 0.02f, GirderZ * 1.3f), CDark);
+                    new Vector3(0.09f, 0.02f, 2f * GirderOuterZ), CDark);
             }
             // 평형추 하부 받침 격자
             for (int s = -1; s <= 1; s += 2)
             {
                 Strut(boom, "CW_Brace",
-                    new Vector3(x0 + 0.01f, 0.0f, s * GirderZ * 0.5f),
-                    new Vector3(x0 + 0.09f, -0.04f, s * GirderZ * 0.5f), 0.006f, CStruct);
+                    new Vector3(x0 + 0.01f, 0.0f, s * GirderGapZ),
+                    new Vector3(x0 + 0.09f, -0.04f, s * GirderGapZ), 0.006f, CStruct);
             }
             // 백스테이 앵커 브래킷
             Box(boom, "Stay_Anchor", new Vector3(x0 + 0.02f, 0.075f, 0f),
-                new Vector3(0.02f, 0.035f, GirderZ * 0.6f), CMachine);
+                new Vector3(0.02f, 0.035f, GirderOuterZ), CMachine);
             // 백리치 끝 플랫폼 + 경고등
             Box(boom, "Back_Platform", new Vector3(x0 + 0.02f, 0.066f, 0f),
-                new Vector3(0.06f, 0.004f, GirderZ * 1.0f), CMachine);
-            Ball(boom, "Back_Light", new Vector3(x0 + 0.004f, 0.05f, 0f),
-                new Vector3(0.012f, 0.016f, 0.012f), CWarn);
+                new Vector3(0.06f, 0.004f, 2f * GirderOuterZ), CMachine);
+            // 백리치 경고등 숨김(사용자 요청) — 복구하려면 주석 해제
+            // Ball(boom, "Back_Light", new Vector3(x0 + 0.004f, 0.05f, 0f),
+            //     new Vector3(0.012f, 0.016f, 0.012f), CWarn);
             // 변압기 + 냉각 유닛(기계 데크)
-            Box(boom, "Transformer", new Vector3(x0 + 0.15f, 0.085f, GirderZ * 0.72f),
+            Box(boom, "Transformer", new Vector3(x0 + 0.15f, 0.085f, GirderGapZ),
                 new Vector3(0.05f, 0.05f, 0.04f), CMachine);
-            Box(boom, "Cooling_Unit", new Vector3(x0 + 0.15f, 0.082f, -GirderZ * 0.72f),
+            Box(boom, "Cooling_Unit", new Vector3(x0 + 0.15f, 0.082f, -GirderGapZ),
                 new Vector3(0.05f, 0.044f, 0.04f), CDark);
 
             // ── 전체 디테일 보강 (붐) ──
@@ -1145,17 +1163,17 @@ namespace Container.Crane.Sts.EditorTools
             for (int s = -1; s <= 1; s += 2)
             {
                 Rod(boom, "Conduit",
-                    new Vector3(x0, -0.012f, s * GirderZ * 0.5f),
-                    new Vector3(x1, -0.012f, s * GirderZ * 0.5f), 0.004f, CDark);
+                    new Vector3(x0, -0.012f, s * GirderGapZ),
+                    new Vector3(x1, -0.012f, s * GirderGapZ), 0.004f, CDark);
             }
             // 붐 코너 작업등 추가
             foreach (float lx in new[] { x0 + 0.06f, x1 - 0.05f })
             {
                 for (int s = -1; s <= 1; s += 2)
                 {
-                    Box(boom, "Floodlight_Housing", new Vector3(lx, -0.006f, s * GirderZ * 0.5f),
+                    Box(boom, "Floodlight_Housing", new Vector3(lx, -0.006f, s * GirderGapZ),
                         new Vector3(0.014f, 0.012f, 0.014f), CDark);
-                    Ball(boom, "Floodlight_Lens", new Vector3(lx, -0.014f, s * GirderZ * 0.5f),
+                    Ball(boom, "Floodlight_Lens", new Vector3(lx, -0.014f, s * GirderGapZ),
                         new Vector3(0.011f, 0.006f, 0.011f), CLight);
                 }
             }
@@ -1200,45 +1218,11 @@ namespace Container.Crane.Sts.EditorTools
                 }
             }
 
-            // 중간 휴식 랜딩 + 난간 — 사다리 정면을 막아서 일단 보류(주석). 나중에 옆으로 빼서 복구.
-            // float landY = Mathf.Lerp(ly0, ly1, 0.55f);
-            // Box(root, "Ladder_Landing", new Vector3(LandLegX, landY, ladderZ + 0.02f),
-            //     new Vector3(0.05f, 0.004f, 0.045f), CMachine);
-            // Box(root, "Ladder_Landing_Rail", new Vector3(LandLegX, landY + 0.03f, ladderZ + 0.042f),
-            //     new Vector3(0.05f, 0.004f, 0.004f), CStruct);
-
-            // 육지쪽 접근 계단(port측) — 어둡고 급경사라 사다리처럼 보여 일단 보류(주석). 나중에 완경사로 복구.
-            /*
-            float stairZ = -(GaugeZ * 0.5f + LegSec * 1.7f * 0.5f + 0.02f);
-            BuildStair(root, LandLegX - 0.04f, stairZ, 0f, RailH * 0.55f, 0.10f, 9, CMachine);
-            // 계단 상단 랜딩 + 난간
-            Box(root, "Stair_Landing", new Vector3(LandLegX + 0.065f, RailH * 0.55f, stairZ),
-                new Vector3(0.05f, 0.004f, 0.05f), CMachine);
-            Box(root, "Landing_Rail", new Vector3(LandLegX + 0.065f, RailH * 0.55f + 0.03f, stairZ - 0.022f),
-                new Vector3(0.05f, 0.004f, 0.004f), CStruct);
-            */
-
-            // 전력 케이블 릴(드럼) — 육지쪽 베이스. 사용자 요청으로 보류(주석). 주석만 풀면 복구.
-            /*
-            float drumX = LandLegX - 0.07f;
-            Box(root, "Reel_Frame", new Vector3(drumX, 0.03f, 0f),
-                new Vector3(0.05f, 0.06f, 0.07f), CStruct);
-            Rod(root, "Cable_Reel",
-                new Vector3(drumX, 0.05f, -0.025f),
-                new Vector3(drumX, 0.05f, 0.025f), 0.032f, CDark);
-            */
-
-            // 갠트리 페스툰(주행 급전) — 실 빔 따라 트랙 + 늘어진 케이블 루프(port측)
-            float gfZ = -(GaugeZ * 0.5f);
-            Box(root, "Gantry_Festoon_Track",
-                new Vector3((LandLegX + WaterLegX) * 0.5f, 0.088f, gfZ),
-                new Vector3(LegSpanX, 0.004f, 0.004f), CDark);
-            for (int i = 0; i < 6; i++)
-            {
-                float fx = Mathf.Lerp(LandLegX + 0.03f, WaterLegX - 0.03f, i / 5f);
-                Box(root, "Gantry_Festoon_Cable", new Vector3(fx, 0.073f, gfZ),
-                    new Vector3(0.005f, 0.028f, 0.005f), CDark);
-            }
+            // 갠트리 페스툰 트랙 숨김(사용자 요청) — 복구하려면 주석 해제
+            // float gfZ = -(GaugeZ * 0.5f);
+            // Box(root, "Gantry_Festoon_Track",
+            //     new Vector3((LandLegX + WaterLegX) * 0.5f, 0.088f, gfZ),
+            //     new Vector3(LegSpanX, 0.004f, 0.004f), CDark);
 
             // 포털 상단 점검 캣워크 — 육지측 두 다리(port/star) 사이를 잇는 통로(그레이팅 + 난간 + 받침)
             float apY = RailH - 0.03f;          // 데크 높이(붐 거더 아래)
@@ -1283,29 +1267,6 @@ namespace Container.Crane.Sts.EditorTools
             {
                 dir /= len;
                 Rod(root, "Turnbuckle", b + dir * 0.03f, b + dir * 0.06f, 0.008f, CDark);
-            }
-        }
-
-        // 접근 계단: 발판 + 양옆 경사 스트링거 + 난간 (x방향으로 전진하며 상승)
-        static void BuildStair(Transform parent, float x, float z, float y0, float y1,
-                               float runX, int steps, Color c)
-        {
-            float dy = (y1 - y0) / steps;
-            float dx = runX / steps;
-            for (int i = 0; i < steps; i++)
-            {
-                float sx = x + dx * (i + 0.5f);
-                float sy = y0 + dy * (i + 0.5f);
-                Box(parent, "Stair_Step", new Vector3(sx, sy, z),
-                    new Vector3(dx * 1.1f, 0.004f, 0.034f), c);
-            }
-            for (int s = -1; s <= 1; s += 2)
-            {
-                float sz = z + s * 0.018f;
-                Strut(parent, "Stair_Stringer",
-                    new Vector3(x, y0, sz), new Vector3(x + runX, y1, sz), 0.004f, c);
-                Strut(parent, "Stair_Rail",
-                    new Vector3(x, y0 + 0.03f, sz), new Vector3(x + runX, y1 + 0.03f, sz), 0.003f, c);
             }
         }
 
@@ -1649,12 +1610,21 @@ namespace Container.Crane.Sts.EditorTools
 
         static Vector3 FindContainerAnchor()
         {
+            // 1) 실제 컨테이너 인스턴스 우선(가장 정확)
+            var instType = System.Type.GetType("ContainerProject.ContainerInstance, Assembly-CSharp");
+            if (instType != null)
+            {
+                var inst = Object.FindFirstObjectByType(instType) as Component;
+                if (inst != null) return inst.transform.position;
+            }
+            // 2) 스포너(보통 매니저 — 원점일 수 있음)
             var spawnerType = System.Type.GetType("ContainerProject.ContainerSpawner, Assembly-CSharp");
             if (spawnerType != null)
             {
                 var spawner = Object.FindFirstObjectByType(spawnerType) as Component;
                 if (spawner != null) return spawner.transform.position;
             }
+            // 3) 이름으로
             var named = GameObject.Find("Container_Procedural");
             if (named != null) return named.transform.position;
             return Vector3.zero;

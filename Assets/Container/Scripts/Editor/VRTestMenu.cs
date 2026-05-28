@@ -37,6 +37,44 @@ namespace ContainerProject.EditorTools
             SpawnSingle(length: ProceduralContainerMesh.Length40ft, suffix: "40ft");
         }
 
+        [MenuItem("Container/Spawn/Procedural 20ft + 40ft (each 1)")]
+        public static void SpawnBothSizes()
+        {
+            // 기존 컨테이너 모두 삭제 (Std Set 동일 패턴)
+            var existing = Object.FindObjectsByType<CubeReset>(FindObjectsSortMode.None);
+            foreach (var c in existing) Undo.DestroyObjectImmediate(c.gameObject);
+
+            // 폭(가로) 방향으로 나란히 — 컨테이너 폭 + 여유만큼 좌우로 벌림
+            const float gap = 0.03f;
+            const float containerWidth = 2.438f / 24f;   // 미니어처 폭(1/24)
+            float half = (containerWidth + gap) * 0.5f;
+
+            SpawnOneOffset(ProceduralContainerMesh.Length20ft, "20ft", -half);
+            var last = SpawnOneOffset(ProceduralContainerMesh.Length40ft, "40ft", +half);
+
+            Selection.activeGameObject = last;
+            var sv = SceneView.lastActiveSceneView;
+            if (sv != null) sv.FrameSelected();
+            Debug.Log("[VRTestMenu] Procedural 20ft + 40ft 각 1개 스폰 — kinematic 고정. 그랩 후 놓으면 물리 활성화.");
+        }
+
+        // 단일 컨테이너를 hOffset(폭 방향) 위치에 스폰. 에디터 미리보기에서도 겹치지 않게 실제 위치를 벌려 둔다.
+        static GameObject SpawnOneOffset(float length, string suffix, float hOffset)
+        {
+            var go = BuildOne(PaletteColors[Random.Range(0, PaletteColors.Length)],
+                              "Container_Procedural_" + suffix, length);
+            var reset = go.GetComponent<CubeReset>();
+            if (reset != null) { reset.SetHorizontalOffset(hOffset); reset.SetVerticalOffset(0f); }
+            // 메시 긴 축이 X라 폭(Z) 방향으로 벌려 나란히 배치 → 에디터에서 둘이 겹쳐 보이던 문제 해결.
+            // Play 진입 시 CubeReset.PlaceInFrontOfCamera 가 카메라 기준 위치로 다시 배치한다.
+            go.transform.position = new Vector3(0f, 0f, hOffset);
+            // 스폰 직후엔 kinematic 고정(물리 튕김 방지). 그랩 후 놓으면 CubeReset 이 풀어줌.
+            var rb = go.GetComponent<Rigidbody>();
+            if (rb != null) rb.isKinematic = true;
+            Undo.RegisterCreatedObjectUndo(go, "Spawn 20ft + 40ft");
+            return go;
+        }
+
         static void SpawnSingle(float length, string suffix)
         {
             // 기존 컨테이너 모두 삭제 (Std Set 동일 패턴)
