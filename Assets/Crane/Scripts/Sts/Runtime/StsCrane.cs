@@ -16,28 +16,33 @@ namespace Container.Crane.Sts
         [SerializeField] TrolleyMover trolley;
         [SerializeField] SpreaderHoist spreader;
         [SerializeField] SpreaderAttach attach;
+        [SerializeField] GantryMover gantry;
 
         [Header("Gizmo 표시")]
         [SerializeField] bool drawGizmos = true;
         [SerializeField] Color boomColor    = new Color(0.3f, 0.7f, 1f, 0.6f);
         [SerializeField] Color railColor    = new Color(0.2f, 0.9f, 1f, 1f);
         [SerializeField] Color hoistColor   = new Color(1f, 0.85f, 0.2f, 1f);
+        [SerializeField] Color gantryColor  = new Color(0.4f, 1f, 0.3f, 1f);
 
         public Transform Boom => boom;
         public IAxisMover Trolley => trolley;
         public IAxisMover Spreader => spreader;
         public SpreaderAttach Attach => attach;
+        public IAxisMover Gantry => gantry;
 
         /// <summary>
         /// Builder가 한 번에 참조를 주입할 때 사용. 직접 인스펙터로 끌어 넣어도 동작은 동일.
         /// </summary>
         public void Configure(Transform boom, TrolleyMover trolley,
-                              SpreaderHoist spreader, SpreaderAttach attach)
+                              SpreaderHoist spreader, SpreaderAttach attach,
+                              GantryMover gantry = null)
         {
             this.boom = boom;
             this.trolley = trolley;
             this.spreader = spreader;
             this.attach = attach;
+            this.gantry = gantry;
         }
 
 #if UNITY_EDITOR
@@ -72,6 +77,28 @@ namespace Container.Crane.Sts
                 Vector3 b = spreader.transform.parent.TransformPoint(
                     new Vector3(spreader.transform.localPosition.x, spreader.Max, spreader.transform.localPosition.z));
                 Gizmos.DrawLine(a, b);
+            }
+
+            // 갠트리 주행 범위 — 루트 Z축 [Min, Max] 라인. 다른 무버처럼 항상 표시.
+            if (gantry != null)
+            {
+                Gizmos.color = gantryColor;
+                Transform p = transform.parent;
+                Vector3 lp = transform.localPosition;
+                Vector3 a, b;
+                if (p != null)
+                {
+                    a = p.TransformPoint(new Vector3(lp.x, lp.y + 0.05f, gantry.Min));
+                    b = p.TransformPoint(new Vector3(lp.x, lp.y + 0.05f, gantry.Max));
+                }
+                else
+                {
+                    a = new Vector3(transform.position.x, transform.position.y + 0.05f, gantry.Min);
+                    b = new Vector3(transform.position.x, transform.position.y + 0.05f, gantry.Max);
+                }
+                Gizmos.DrawLine(a, b);
+                Gizmos.DrawWireSphere(a, 0.04f);
+                Gizmos.DrawWireSphere(b, 0.04f);
             }
         }
 #endif

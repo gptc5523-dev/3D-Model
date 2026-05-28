@@ -145,14 +145,76 @@ namespace ContainerProject.EditorTools
             Debug.Log("[VRTestMenu] Procedural 컨테이너 4개 (2x2) 스폰 — kinematic 으로 고정. 그랩 후 놓으면 물리 활성화.");
         }
 
-        // ───────────────────────────── 단일 컨테이너 빌더 ─────────────────────────────
-        static GameObject BuildOne(Color bodyColor, string name, float length = -1f)
+        // Quay_Ground 아스팔트 위에 20ft·40ft 각 2개를 야드처럼 고정 배치.
+        // CubeReset 미부착 → Play 시 카메라 앞으로 순간이동하지 않고 부두에 그대로 안착(크레인/손 집기 가능).
+        [MenuItem("Container/Place Containers on Quay")]
+        public static void PlaceContainersOnQuay()
         {
-            // 1. 메시 (매번 새로 — 미니어처 스케일 1/24, 중심 피봇, X=긴 방향)
+            // 재실행 대비 — 기존 야드 컨테이너 제거
+            foreach (var existing in Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
+                if (existing.name.StartsWith("Yard_Container")) Undo.DestroyObjectImmediate(existing);
+
+            var quay = GameObject.Find("Quay_Ground");
+            if (quay == null)
+                Debug.LogWarning("[VRTestMenu] Quay_Ground 가 없습니다 — 월드 원점 기준으로 배치합니다. " +
+                                 "먼저 'Container/Create Quay Ground' 실행을 권장합니다.");
+
+            // 긴 축 = Z(안벽과 나란히) → 로컬 X(길이)를 월드 Z로 돌리는 Y축 90° 회전.
+            // 위치는 바다(+X) 아웃리치 쪽으로 한 줄 배치(z=0 → 트롤리 X 이동만으로 집기 가능).
+            // 바닥 피봇이라 y=아스팔트 윗면. 시작 관통 방지로 살짝 띄움.
+            // ※ 좌표는 현재 크레인 위치(루트 x≈-0.333)에 맞춘 값 — 크레인을 옮기면 같이 조정 필요.
+            const float yRest = 0.002f;
+            const float ContainerH = ProceduralContainerMesh.HeightStd * ProceduralContainerMesh.DefaultMiniatureScale;
+            const float yStack = yRest + ContainerH + 0.002f;   // 아래 칸 윗면 + 2mm 여유
+            var rot = Quaternion.Euler(0f, 90f, 0f);
+            // 하단 줄: 40·40·20·20·40 (육지→바다 순, 중심 간격 0.12m, 폭 ≈0.102 → 틈 ≈1.8cm).
+            // 상단 2칸: 40ft_A·20ft_A 위에 같은 X로 같은 사이즈 2단 적층.
+            var specs = new (float len, string name, Vector3 pos)[]
+            {
+                (ProceduralContainerMesh.Length40ft, "Yard_Container_40ft_A", new Vector3(0.60f, yRest,  0f)),
+                (ProceduralContainerMesh.Length40ft, "Yard_Container_40ft_B", new Vector3(0.72f, yRest,  0f)),
+                (ProceduralContainerMesh.Length20ft, "Yard_Container_20ft_A", new Vector3(0.84f, yRest,  0f)),
+                (ProceduralContainerMesh.Length20ft, "Yard_Container_20ft_B", new Vector3(0.96f, yRest,  0f)),
+                (ProceduralContainerMesh.Length40ft, "Yard_Container_40ft_D", new Vector3(1.08f, yRest,  0f)),  // 20ft_B 바다쪽 옆
+                (ProceduralContainerMesh.Length40ft, "Yard_Container_40ft_C", new Vector3(0.60f, yStack, 0f)),  // 40ft_A 위
+                (ProceduralContainerMesh.Length20ft, "Yard_Container_20ft_C", new Vector3(0.84f, yStack, 0f)),  // 20ft_A 위
+            };
+
+            GameObject last = null;
+            for (int i = 0; i < specs.Length; i++)
+            {
+                var s = specs[i];
+                var go = BuildOne(PaletteColors[i % PaletteColors.Length], s.name, s.len, withReset: false);
+                go.transform.SetPositionAndRotation(s.pos, rot);
+                if (quay != null) go.transform.SetParent(quay.transform, worldPositionStays: true);
+                // 정적 화물 — 중력으로 아스팔트(VirtualFloor)에 안착. 크레인/손이 집으면 풀림.
+                var rb = go.GetComponent<Rigidbody>();
+                if (rb != null) { rb.isKinematic = false; rb.useGravity = true; }
+                Undo.RegisterCreatedObjectUndo(go, "Place Containers on Quay");
+                last = go;
+            }
+
+            if (last != null)
+            {
+                Selection.activeGameObject = last;
+                var sv = SceneView.lastActiveSceneView;
+                if (sv != null) sv.FrameSelected();
+            }
+            Debug.Log("[VRTestMenu] Quay_Ground 에 컨테이너 7개 배치 — 하단 40·40·20·20·40 한 줄(긴 축 Z, 육지→바다), " +
+                      "상단 40ft·20ft 1개씩 2단 적층. CubeReset 없음 → Play 시 카메라 앞으로 안 튐.");
+        }
+
+        // ───────────────────────────── 단일 컨테이너 빌더 ─────────────────────────────
+        // withReset:false → CubeReset 미부착(Play 시 카메라 앞으로 순간이동하지 않음). 야드 고정 배치용.
+        static GameObject BuildOne(Color bodyColor, string name, float length = -1f, bool withReset = true)
+        {
+            // 1. 메시 (매번 새로 — 미니어처 스케일 1/24, 바닥 피봇, X=긴 방향)
+            //    centerPivot:false → 피봇(원점)이 컨테이너 바닥면. 루트=바닥면 규칙을 크레인(루트=접지)·
+            //    VirtualFloor(윗면 y=0)과 통일해, y=0에 두면 바닥에 정확히 올라앉는다(가라앉지 않음).
             //    length 인자 양수면 BuildSized 로 임의 사이즈, 아니면 기본 20ft Build
             Mesh mesh = length > 0f
-                ? ProceduralContainerMesh.BuildSized(length, ProceduralContainerMesh.StdWidth, ProceduralContainerMesh.HeightStd, name + "_Mesh")
-                : ProceduralContainerMesh.Build(name + "_Mesh");
+                ? ProceduralContainerMesh.BuildSized(length, ProceduralContainerMesh.StdWidth, ProceduralContainerMesh.HeightStd, name + "_Mesh", centerPivot: false)
+                : ProceduralContainerMesh.Build(name + "_Mesh", centerPivot: false);
 
             // 2. 셰이더
             Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
@@ -182,7 +244,7 @@ namespace ContainerProject.EditorTools
             // useDynamicAttach: 손이 닿은 지점이 그립 포인트가 되도록 (피봇 스냅 방지)
             var grab = root.AddComponent<XRGrabInteractable>();
             grab.useDynamicAttach = true;
-            root.AddComponent<CubeReset>();
+            if (withReset) root.AddComponent<CubeReset>();
 
             return root;
         }

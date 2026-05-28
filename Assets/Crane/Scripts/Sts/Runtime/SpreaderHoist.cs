@@ -14,13 +14,18 @@ namespace Container.Crane.Sts
         [SerializeField] float min = 0.05f;
         [SerializeField] float max = 4f;
 
+        // 컨테이너 적재 시 하강 한계를 올리는 양 — 스프레더가 아니라 '컨테이너 밑면'이 바닥에 닿게.
+        // SpreaderGrabber가 잡을 때 설정, 놓을 때 0으로. 0이면 빈 스프레더(기존 동작).
+        float floorOffset = 0f;
+        public void SetFloorOffset(float v) => floorOffset = Mathf.Max(0f, v);
+
         public float Min => min;
         public float Max => max;
         public float Current => transform.localPosition.y;
 
         public void MoveTo(float value)
         {
-            float clamped = Mathf.Clamp(value, min, max);
+            float clamped = Mathf.Clamp(value, min + floorOffset, max);
             var p = transform.localPosition;
             p.y = clamped;
             transform.localPosition = p;

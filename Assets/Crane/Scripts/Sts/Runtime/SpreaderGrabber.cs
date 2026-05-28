@@ -35,6 +35,7 @@ namespace Container.Crane.Sts
         StsCrane crane;
         SpreaderLockAnimator lockAnim;
         SpreaderTelescope telescope;   // 잡은 컨테이너 크기에 맞춰 20/40ft 신축
+        SpreaderHoist spreaderHoist;   // 잡은 컨테이너 밑면 기준으로 하강 바닥 한계 설정
         Transform[] twistlocks;   // Twistlock_Cone들 — 잡기 기준점
         Rigidbody[] bodies = System.Array.Empty<Rigidbody>();   // 크레인 외부의 집을 수 있는 강체들
         float nextRefresh;
@@ -46,6 +47,7 @@ namespace Container.Crane.Sts
             crane = GetComponent<StsCrane>();
             lockAnim = GetComponentInChildren<SpreaderLockAnimator>(true);
             telescope = GetComponentInChildren<SpreaderTelescope>(true);
+            spreaderHoist = crane != null ? crane.Spreader as SpreaderHoist : null;
 
             var list = new List<Transform>();
             foreach (var t in GetComponentsInChildren<Transform>(true))
@@ -117,6 +119,17 @@ namespace Container.Crane.Sts
             lp.y -= pivotToTop;
             c.localPosition = lp;
 
+            // 하강 바닥 한계를 '컨테이너 밑면' 기준으로 — 스프레더가 아니라 컨테이너가 바닥(y=0)에 닿고 멈추게.
+            if (spreaderHoist != null && TryBounds(c, out Bounds held))
+            {
+                Transform sp = spreaderHoist.transform;                 // 스프레더 원점
+                float dropToBottom = sp.position.y - held.min.y;        // 스프레더 원점 → 컨테이너 밑면(아래로)
+                float parentY = sp.parent != null ? sp.parent.position.y : 0f;
+                float floorMinY = dropToBottom - parentY;               // 컨테이너 밑면이 y=0에 오는 스프레더 로컬 Y
+                spreaderHoist.SetFloorOffset(floorMinY - spreaderHoist.Min);
+                if (debugLog) Debug.Log($"[Crane] 컨테이너 밑면 기준 바닥 — 하강한계 +{floorMinY - spreaderHoist.Min:F3} (높이 {held.size.y:F3})");
+            }
+
             if (lockAnim != null) lockAnim.SetLocked(true);
         }
 
@@ -127,6 +140,7 @@ namespace Container.Crane.Sts
             if (attach == null || !attach.HasContainer) return;
 
             attach.Detach();
+            if (spreaderHoist != null) spreaderHoist.SetFloorOffset(0f);   // 빈 스프레더 바닥 한계 복원
             if (lockAnim != null) lockAnim.SetLocked(false);
             if (debugLog) Debug.Log("[Crane] 놓기(Detach)");
         }
@@ -173,13 +187,19 @@ namespace Container.Crane.Sts
         {
             dist = float.MaxValue;
 
-            // 콜라이더 기반 우선 — grabRange 안의 콜라이더 중 크레인 외부 Rigidbody가 달린 것
+            // 콜라이더 기반 우선 — grabRange 안의 콜라이더 중 크레인 외부 Rigidbody가 달린 것들 중 '가장 가까운' 1개
+            //   (예전: 첫 hit을 그대로 잡아 원치 않는 컨테이너가 짚히던 문제 → 최근접으로 선택)
+            Transform nearestCol = null;
+            float nearestColD = float.MaxValue;
             var hits = Physics.OverlapSphere(gp, grabRange);
             foreach (var h in hits)
             {
                 var rb = h.attachedRigidbody;
-                if (rb != null && !rb.transform.IsChildOf(transform)) { dist = 0f; return rb.transform; }
+                if (rb == null || rb.transform.IsChildOf(transform)) continue;
+                float d = Vector3.Distance(gp, h.ClosestPoint(gp));   // 콜라이더 표면까지 거리
+                if (d < nearestColD) { nearestColD = d; nearestCol = rb.transform; }
             }
+            if (nearestCol != null) { dist = nearestColD; return nearestCol; }
 
             // 렌더러 바운즈 최근접(콜라이더를 못 맞춘 경우)
             Transform best = null;
