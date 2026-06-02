@@ -1,0 +1,55 @@
+using UnityEngine;
+
+namespace Container.Crane.Sts
+{
+    /// <summary>
+    /// 단일 축 무버 공통 베이스 — Gantry(Z)·Trolley(X)·SpreaderHoist(Y)가 공유.
+    /// 클램프·이동·정규화·기즈모 골격을 한곳에 모으고, 파생 클래스는 '어느 축인지'(읽기/쓰기)와
+    /// 표시 색만 제공한다. min/max 직렬화 필드는 의도적으로 파생 클래스에 남겨 둔다
+    /// (각자의 기본값·Header·기존 인스펙터/프리팹 값 보존 → 직렬화 변화 없음).
+    /// </summary>
+    public abstract class AxisMoverBase : MonoBehaviour, IAxisMover
+    {
+        public abstract float Min { get; }
+        public abstract float Max { get; }
+        public float Current => ReadAxis();
+
+        /// <summary>이동 가능한 하한 — 기본은 Min. SpreaderHoist가 floorOffset 반영 위해 override.</summary>
+        protected virtual float LowerLimit => Min;
+
+        public void MoveTo(float value)
+        {
+            float clamped = Mathf.Clamp(value, LowerLimit, Max);
+            WriteAxis(clamped);
+            OnMoved(clamped);
+        }
+
+        public void MoveToNormalized(float t01) => MoveTo(Mathf.Lerp(Min, Max, Mathf.Clamp01(t01)));
+
+        /// <summary>자신의 로컬 축(x/y/z) 현재값을 읽는다.</summary>
+        protected abstract float ReadAxis();
+        /// <summary>자신의 로컬 축(x/y/z)에 클램프된 값을 쓴다.</summary>
+        protected abstract void WriteAxis(float clamped);
+        /// <summary>이동 직후 훅 — TrolleyMover가 스프레더 X 동기화에 사용. 기본은 아무것도 안 함.</summary>
+        protected virtual void OnMoved(float clamped) { }
+
+#if UNITY_EDITOR
+        /// <summary>기즈모를 그릴 로컬 축 인덱스(0=x, 1=y, 2=z).</summary>
+        protected abstract int GizmoAxis { get; }
+        protected abstract Color GizmoColor { get; }
+
+        void OnDrawGizmosSelected()
+        {
+            Transform parent = transform.parent != null ? transform.parent : transform;
+            Vector3 aL = transform.localPosition, bL = transform.localPosition;
+            aL[GizmoAxis] = Min; bL[GizmoAxis] = Max;
+            Vector3 a = parent.TransformPoint(aL);
+            Vector3 b = parent.TransformPoint(bL);
+            Gizmos.color = GizmoColor;
+            Gizmos.DrawLine(a, b);
+            Gizmos.DrawWireSphere(a, 0.04f);
+            Gizmos.DrawWireSphere(b, 0.04f);
+        }
+#endif
+    }
+}

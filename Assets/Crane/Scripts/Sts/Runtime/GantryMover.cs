@@ -8,25 +8,22 @@ namespace Container.Crane.Sts
     /// </summary>
     [AddComponentMenu("Container/STS Crane/Gantry Mover")]
     [DisallowMultipleComponent]
-    public sealed class GantryMover : MonoBehaviour, IAxisMover
+    public sealed class GantryMover : AxisMoverBase
     {
         [Header("주행 범위 (로컬 Z, 미터)")]
         [SerializeField] float min = -1f;
         [SerializeField] float max =  1f;
 
-        public float Min => min;
-        public float Max => max;
-        public float Current => transform.localPosition.z;
+        public override float Min => min;
+        public override float Max => max;
 
-        public void MoveTo(float value)
+        protected override float ReadAxis() => transform.localPosition.z;
+        protected override void WriteAxis(float clamped)
         {
-            float clamped = Mathf.Clamp(value, min, max);
             var p = transform.localPosition;
             p.z = clamped;
             transform.localPosition = p;
         }
-
-        public void MoveToNormalized(float t01) => MoveTo(Mathf.Lerp(min, max, Mathf.Clamp01(t01)));
 
         /// <summary>Builder가 한 번에 셋업할 때 사용. min/max는 절대 로컬 Z(생성 시 초기 위치 기준 ±range로 줄 것).</summary>
         public void Configure(float minZ, float maxZ)
@@ -36,16 +33,8 @@ namespace Container.Crane.Sts
         }
 
 #if UNITY_EDITOR
-        void OnDrawGizmosSelected()
-        {
-            Transform parent = transform.parent != null ? transform.parent : transform;
-            Vector3 a = parent.TransformPoint(new Vector3(transform.localPosition.x, transform.localPosition.y, min));
-            Vector3 b = parent.TransformPoint(new Vector3(transform.localPosition.x, transform.localPosition.y, max));
-            Gizmos.color = new Color(0.4f, 1f, 0.3f, 0.9f);
-            Gizmos.DrawLine(a, b);
-            Gizmos.DrawWireSphere(a, 0.04f);
-            Gizmos.DrawWireSphere(b, 0.04f);
-        }
+        protected override int GizmoAxis => 2;   // Z
+        protected override Color GizmoColor => new Color(0.4f, 1f, 0.3f, 0.9f);
 #endif
     }
 }

@@ -53,3 +53,7 @@ ExportedObj/
 *.aab
 *.unitypackage
 *.app
+
+# Android signing keys (secret — never commit)
+*.keystore
+*.jks

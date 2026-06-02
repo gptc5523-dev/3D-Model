@@ -32,6 +32,12 @@ namespace Container.Crane.Sts
         public IAxisMover Gantry => gantry;
 
         /// <summary>
+        /// 모델이 실척의 몇 배로 생성됐는지(StsCraneCreator.Scale=1/24와 동일). 단일 소스 — 속도/거리
+        /// 환산(모델 units ↔ 실제 m)이 필요한 HUD·컨트롤러가 각자 상수를 두지 말고 이 값을 참조한다.
+        /// </summary>
+        public float ModelScale => 1f / 24f;
+
+        /// <summary>
         /// Builder가 한 번에 참조를 주입할 때 사용. 직접 인스펙터로 끌어 넣어도 동작은 동일.
         /// </summary>
         public void Configure(Transform boom, TrolleyMover trolley,

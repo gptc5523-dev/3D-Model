@@ -40,6 +40,7 @@ namespace Container.Crane.Sts.EditorTools
         const float GaugeZ   = 16f  * Scale;       // 레일 게이지(좌우 다리 간격, Z) — 40ft(12.192/24=0.508m) 길이 + 스프레더 양끝 클리어런스 수용 (12→16, 0.667m)
         const float LegSpanX = 15f  * Scale;       // 육지/바다 다리 간격(X=레일 게이지) ≈ 실척 15m — 비율(게이지≈0.6×아웃리치) 맞춰 9→15. 바다다리 이동으로 아웃리치≈25m
         const float LegSec   = 0.6f * Scale;       // 다리 단면 한 변
+        const float LegTopY  = RailH + 0.088f;     // 포털 다리/상부 크로스빔/A프레임 베이스 공통 상단. 붐 거더 윗면(≈RailH+0.065)보다 살짝 위 → 거더가 크로스빔에 붙고 트롤리·거더가 그 아래
         // 트윈(더블 박스) 거더 — 두 박스 거더를 z=±GirderGapZ에 두고 사이를 횡프레임·평면 대각으로 결속.
         const float GirderGapZ   = 0.16f;                          // 각 거더 중심 Z — 붐 바깥 끝쪽까지 넓게(다리 게이지 ±0.333 안쪽)
         const float GirderWidthZ = 0.045f;                         // 각 박스 거더 단면 폭(Z)
@@ -61,7 +62,7 @@ namespace Container.Crane.Sts.EditorTools
         const float WaterLegX = LegSpanX;
 
         // 스프레더 승강 (spreaderRoot=붐 레벨 기준 로컬 Y, 음수=아래)
-        const float SpreaderMaxY  = -3f  * Scale;           // 완전 상승 = 헤드블록이 트롤리 바로 아래 도킹(붐에 안 박히게)
+        const float SpreaderMaxY  = -4f  * Scale;           // 완전 상승 = 헤드블록이 트롤리 헤드 바로 아래 도킹. -3→-4: 헤드 치크(상단 hbY+0.0265)가 트롤리 헤드 하단(-0.0725)을 파고들어 -1*Scale 더 내려 ~9mm 여유 확보
         const float SpreaderMinY  = -(RailH - 0.8f * Scale); // 지면 직전(붐 높이에 연동)
         const float SpreaderRestY = -10f * Scale;
 
@@ -90,6 +91,8 @@ namespace Container.Crane.Sts.EditorTools
         static Texture2D _steelTex;
         // 모든 Box/Strut가 공유하는 모서리 베벨(챔퍼) 큐브 메시
         static Mesh _beveledCube;
+        // 트러스 절점 연결판(거싯) — 같은 치수끼리 메시 1개 재사용
+        static Dictionary<string, Mesh> _plateCache;
 
         [MenuItem("Container/Create STS Crane")]
         public static void CreateFromMenu40ft() => CreateAtContainer(SpreaderHalf40);
@@ -122,6 +125,7 @@ namespace Container.Crane.Sts.EditorTools
         {
             _matCache = new Dictionary<Color, Material>();
             _steelTex = null;
+            _plateCache = new Dictionary<string, Mesh>();
 
             var root = new GameObject(RootName);
             Undo.RegisterCreatedObjectUndo(root, "Create STS Crane");
@@ -196,6 +200,7 @@ namespace Container.Crane.Sts.EditorTools
 
             _matCache = null;
             _steelTex = null;   // 텍스처는 머티리얼이 참조 유지 → 캐시 핸들만 해제
+            _plateCache = null; // 거싯 메시도 GameObject가 참조 유지 → 핸들만 해제
             return root;
         }
 
@@ -223,6 +228,8 @@ namespace Container.Crane.Sts.EditorTools
         {
             float halfZ = GaugeZ * 0.5f;
             float[] legX = { LandLegX, WaterLegX };
+            // 다리 상단 = LegTopY(공통 상수). 붐 거더 윗면에 크로스빔이 붙고, A프레임 베이스도 같은 높이로 정합.
+            float legTopY = LegTopY;
 
             foreach (float x in legX)
             {
@@ -230,7 +237,7 @@ namespace Container.Crane.Sts.EditorTools
                 {
                     float z = s * halfZ;
                     // 다리 — 격자 트러스(코너 포스트 + 가로 rung + 대각 lacing)
-                    BuildLatticeLeg(root, x, z, 0f, RailH, LegSec * 1.7f);
+                    BuildLatticeLeg(root, x, z, 0f, legTopY, LegSec * 1.7f);
                     // 보기(주행 대차) — 이퀄라이저 빔 + 바퀴 4개. Z축으로 주행하므로 보기는 Z로 길다.
                     Box(root, "Bogie", new Vector3(x, 0.05f, z),
                         new Vector3(LegSec * 1.0f, 0.026f, LegSec * 2.6f), CDark);
@@ -248,10 +255,12 @@ namespace Container.Crane.Sts.EditorTools
                 }
             }
 
-            // 좌우 다리를 잇는 상부 크로스 빔(포털 상단) — X 위치마다 1개
+            // 좌우 다리를 잇는 상부 크로스 빔(포털 상단) — X 위치마다 1개.
+            //   붐 상부 보도(Boom_Toe/Mid-rail/Walkway_Deck)가 이 빔과 같은 높이대라, 보도 부재 쪽을
+            //   포털 통과 지점(육지/바다 다리 X)에서 끊어 개구부로 지나가게 한다(BoomTopWalkwayGaps 참조).
             foreach (float x in legX)
             {
-                Box(root, "Portal_Cross", new Vector3(x, RailH - LegSec * 0.5f, 0f),
+                Box(root, "Portal_Cross", new Vector3(x, legTopY - LegSec * 0.5f, 0f),
                     new Vector3(LegSec * 0.8f, LegSec * 0.8f, GaugeZ + LegSec), CStruct);
             }
 
@@ -582,12 +591,12 @@ namespace Container.Crane.Sts.EditorTools
                 float z = s * GirderOuterZ;
                 Box(boom, "Boom_Railing", new Vector3(mid, railTop, z),
                     new Vector3(len, 0.006f, 0.006f), CStruct);
-                // 중간 가로대
-                Box(boom, "Boom_Railing_Mid", new Vector3(mid, (railTop + girderTop) * 0.5f, z),
-                    new Vector3(len, 0.004f, 0.004f), CStruct);
-                // 토보드(킥플레이트) — 보도 가장자리
-                Box(boom, "Boom_Toe", new Vector3(mid, girderTop + 0.009f, z),
-                    new Vector3(len, 0.012f, 0.003f), CStruct);
+                // 중간 가로대 — 포털 빔 통과 지점에서 끊음
+                BoxGappedX(boom, "Boom_Railing_Mid", x0, x1, (railTop + girderTop) * 0.5f, z,
+                    0.004f, 0.004f, CStruct, BoomTopWalkwayGapX, BoomTopWalkwayGapHalf);
+                // 토보드(킥플레이트) — 보도 가장자리. 포털 빔 통과 지점에서 끊음(Portal_Cross 관통 방지)
+                BoxGappedX(boom, "Boom_Toe", x0, x1, girderTop + 0.009f, z,
+                    0.012f, 0.003f, CStruct, BoomTopWalkwayGapX, BoomTopWalkwayGapHalf);
                 for (int i = 0; i <= posts; i++)
                 {
                     float px = Mathf.Lerp(x0, x1, i / (float)posts);
@@ -700,7 +709,7 @@ namespace Container.Crane.Sts.EditorTools
                 {
                     Strut(root, "Aframe",
                         new Vector3(apex.x, apex.y, s * apexHalfZ),
-                        new Vector3(lx, RailH, s * halfZ), 0.012f, CStruct);
+                        new Vector3(lx, LegTopY, s * halfZ), 0.012f, CStruct);
                 }
             }
 
@@ -711,7 +720,7 @@ namespace Container.Crane.Sts.EditorTools
                 foreach (float t in lv)
                 {
                     float bx = Mathf.Lerp(WaterLegX, legX, t);
-                    float by = Mathf.Lerp(apex.y, RailH, t);
+                    float by = Mathf.Lerp(apex.y, LegTopY, t);
                     // 가로 브레이스 폭 — 꼭대기(코너 ±apexHalfZ)에서 다리 베이스(±halfZ)로
                     Box(root, "Aframe_Brace", new Vector3(bx, by, 0f),
                         new Vector3(0.007f, 0.007f, 2f * Mathf.Lerp(apexHalfZ, halfZ, t)), CStruct);
@@ -719,8 +728,8 @@ namespace Container.Crane.Sts.EditorTools
                 // 큰 X 하나 — 면의 꼭대기 코너(±apexHalfZ)에서 다리 베이스 반대편(±halfZ)으로 교차(지그재그 제거)
                 Vector3 tN = new Vector3(apex.x, apex.y, -apexHalfZ);
                 Vector3 tP = new Vector3(apex.x, apex.y,  apexHalfZ);
-                Vector3 bN = new Vector3(legX, RailH, -halfZ);
-                Vector3 bP = new Vector3(legX, RailH,  halfZ);
+                Vector3 bN = new Vector3(legX, LegTopY, -halfZ);
+                Vector3 bP = new Vector3(legX, LegTopY,  halfZ);
                 Strut(root, "Aframe_Lace", tN, bP, 0.008f, CStruct);
                 Strut(root, "Aframe_Lace", tP, bN, 0.008f, CStruct);
             }
@@ -729,7 +738,7 @@ namespace Container.Crane.Sts.EditorTools
             foreach (float t in new[] { 0.38f, 0.66f })
             {
                 float lx = Mathf.Lerp(WaterLegX, LandLegX, t);
-                float yy = Mathf.Lerp(apex.y, RailH, t);
+                float yy = Mathf.Lerp(apex.y, LegTopY, t);
                 float sz = Mathf.Lerp(apexHalfZ, halfZ, t);   // 다리의 안쪽 기울기에 맞춤(코너→베이스)
                 for (int s = -1; s <= 1; s += 2)
                 {
@@ -737,6 +746,19 @@ namespace Container.Crane.Sts.EditorTools
                         new Vector3((WaterLegX + lx) * 0.5f, yy, s * sz),
                         new Vector3(Mathf.Abs(WaterLegX - lx), 0.006f, 0.006f), CStruct);
                 }
+            }
+
+            // A-프레임 절점 거싯 — 정상 코너 결합부 + 다리 상단 결합부(측면 ±Z 면에 연결판).
+            //   A-프레임 다리(Strut)·라싱이 한 점에 모이는 곳에 용접 거싯을 덧대 절점 표현.
+            float afG = 0.013f, afT = 0.004f, afOff = 0.003f;
+            for (int s = -1; s <= 1; s += 2)
+            {
+                Quaternion fr = s > 0 ? Quaternion.identity : Quaternion.Euler(0, 180, 0);
+                // 정상 코너(가로보 끝, A-프레임 다리가 물리는 곳)
+                Gusset(root, new Vector3(apex.x, apex.y, s * apexHalfZ + s * afOff), fr, afG, afT, CStruct);
+                // 다리 상단 결합부(육지/바다 다리)
+                foreach (float lx in new[] { LandLegX, WaterLegX })
+                    Gusset(root, new Vector3(lx, LegTopY + 0.012f, s * halfZ + s * afOff), fr, afG, afT, CStruct);
             }
 
             // 정상 시브 네스트(스테이 도르래) + 장비 하우징 — 시브를 감싸게 거더 폭에 맞춤
@@ -1068,6 +1090,29 @@ namespace Container.Crane.Sts.EditorTools
                         new Vector3(cx + sx * half, up ? ya : yb, cz - half),
                         new Vector3(cx + sx * half, up ? yb : ya, cz + half), postT * 0.55f, CStruct);
             }
+
+            // 절점 연결판(거싯) — 라싱/포스트 교차 노드에 면마다 챔퍼 8각 판(용접 연결 표현).
+            //   순수 추가(기존 포스트/라싱 좌표는 그대로) — 4 코너 포스트가 만나는 ±X·±Z 면에 부착.
+            float gSize = postT * 1.15f;
+            float gThick = postT * 0.22f;
+            float gOff = gThick * 0.55f;          // 면에서 살짝 띄워 z-fighting 방지
+            for (int i = 2; i < segs; i += 3)     // 내부 노드 일부(과밀 방지)
+            {
+                float y = y0 + step * i;
+                for (int sx = -1; sx <= 1; sx += 2)
+                {
+                    // ±Z 면(코너 x=cx±half)
+                    Gusset(root, new Vector3(cx + sx * half, y, cz + half + gOff),
+                        Quaternion.identity,        gSize, gThick, CStruct);
+                    Gusset(root, new Vector3(cx + sx * half, y, cz - half - gOff),
+                        Quaternion.Euler(0, 180, 0), gSize, gThick, CStruct);
+                    // ±X 면(코너 z=cz±half)
+                    Gusset(root, new Vector3(cx + half + gOff, y, cz + sx * half),
+                        Quaternion.Euler(0, 90, 0),  gSize, gThick, CStruct);
+                    Gusset(root, new Vector3(cx - half - gOff, y, cz + sx * half),
+                        Quaternion.Euler(0, -90, 0), gSize, gThick, CStruct);
+                }
+            }
         }
 
         // 붐 디테일: 보도 그레이팅 + 끝단 시브(도르래) + 작업등
@@ -1078,8 +1123,8 @@ namespace Container.Crane.Sts.EditorTools
 
             // 보도 그레이팅 — 거더 위 2장 + 가운데(Boom_Vertical/브레이스 위) 1장으로 상단 전체를 막음(연속 보도, 패널 이음새 유지)
             for (int s = -1; s <= 1; s += 2)
-                Box(boom, "Walkway_Deck", new Vector3(mid, 0.067f, s * GirderGapZ),
-                    new Vector3(len, 0.004f, 0.05f), CMachine);
+                BoxGappedX(boom, "Walkway_Deck", x0, x1, 0.067f, s * GirderGapZ,
+                    0.004f, 0.05f, CMachine, BoomTopWalkwayGapX, BoomTopWalkwayGapHalf);
             // 중앙 보도 숨김(사용자 요청) — 복구하려면 주석 해제
             // Box(boom, "Walkway_Deck_Mid", new Vector3(mid, 0.067f, 0f),
             //     new Vector3(len, 0.004f, 2f * (GirderGapZ - 0.025f)), CMachine);
@@ -1253,8 +1298,10 @@ namespace Container.Crane.Sts.EditorTools
             //     new Vector3((LandLegX + WaterLegX) * 0.5f, 0.088f, gfZ),
             //     new Vector3(LegSpanX, 0.004f, 0.004f), CDark);
 
-            // 포털 상단 점검 캣워크 — 육지측 두 다리(port/star) 사이를 잇는 통로(그레이팅 + 난간 + 받침)
-            float apY = RailH - 0.03f;          // 데크 높이(붐 거더 아래)
+            // 포털 상단 점검 캣워크 — 사용자 요청으로 제거(Access_Platform / Platform_Rail / RailMid / Toe / Post
+            // + 받침 브래킷 Platform_Bracket). 복구하려면 아래 /* */ 만 지우면 됨.
+            /*
+            float apY = RailH - 0.09f;          // 데크 높이
             float apHZ = GaugeZ * 0.5f;         // 다리 위치(±)까지
             float apW = 0.05f;                  // 통로 폭(X)
             Box(root, "Access_Platform", new Vector3(LandLegX, apY, 0f),
@@ -1282,6 +1329,7 @@ namespace Container.Crane.Sts.EditorTools
                         new Vector3(0.004f, 0.034f, 0.004f), CStruct);
                 }
             }
+            */
         }
 
         // 스테이 케이블 + 앵커 플레이트(양끝) + 턴버클(붐 쪽 하단)
@@ -1353,6 +1401,29 @@ namespace Container.Crane.Sts.EditorTools
             go.transform.localScale = localScale;
             Colorize(go, color);
             return go;
+        }
+
+        // 붐 상부 보도 부재가 포털 빔과 만나는 X 구간 — 그 폭만큼 보도를 끊는다(다리 X마다).
+        // Portal_Cross X 반폭(LegSec*0.4) + 여유. BuildBoomStructure/Details(붐 로컬)에서 공통 사용.
+        static readonly float[] BoomTopWalkwayGapX = { LandLegX, WaterLegX };
+        const float BoomTopWalkwayGapHalf = LegSec * 0.4f + 0.006f;
+
+        // X축으로 긴 보도 박스를 gapCenters±gapHalf 구간에서 끊어 여러 토막으로 생성(포털 빔 관통 방지).
+        static void BoxGappedX(Transform parent, string name, float x0, float x1, float y, float z,
+                               float thickY, float thickZ, Color color, float[] gapCenters, float gapHalf)
+        {
+            var cuts = new List<float> { x0 };
+            foreach (float gc in gapCenters)
+                if (gc - gapHalf > x0 && gc + gapHalf < x1) { cuts.Add(gc - gapHalf); cuts.Add(gc + gapHalf); }
+            cuts.Add(x1);
+            cuts.Sort();
+            for (int i = 0; i + 1 < cuts.Count; i += 2)   // 유지 구간 = (cuts[0],cuts[1]),(cuts[2],cuts[3])...
+            {
+                float a = cuts[i], b = cuts[i + 1];
+                if (b - a > 0.004f)
+                    Box(parent, name, new Vector3((a + b) * 0.5f, y, z),
+                        new Vector3(b - a, thickY, thickZ), color);
+            }
         }
 
         // a→b 를 잇는 가는 막대(다리/케이블/대각). 부모는 회전·스케일 없는 노드여야 정확.
@@ -1448,6 +1519,80 @@ namespace Container.Crane.Sts.EditorTools
             m.SetTriangles(tris, 0);
             m.RecalculateNormals();
             m.RecalculateBounds();
+            return m;
+        }
+
+        // ───────── 트러스 절점 연결판(거싯) ─────────
+
+        // 트러스 절점에 면과 평평하게 붙는 모서리 챔퍼 8각 판(용접 거싯 표현).
+        // faceRot: 판 로컬 +Z를 면 바깥 노멀로 향하게 하는 회전(+Z면=identity, -Z면=Euler(0,180,0),
+        //          +X면=Euler(0,90,0), -X면=Euler(0,-90,0)). 8각이라 직사각 박스보다 곡면 느낌.
+        static GameObject Gusset(Transform parent, Vector3 localPos, Quaternion faceRot,
+                                 float size, float thick, Color color)
+        {
+            string key = $"g{size:F4}_{thick:F4}";
+            if (_plateCache == null) _plateCache = new Dictionary<string, Mesh>();
+            if (!_plateCache.TryGetValue(key, out var mesh))
+            {
+                float s = size, c = size * 0.22f;   // c=모서리 챔퍼 폭(과하면 알약처럼 보임)
+                var poly = new[]
+                {
+                    new Vector2(-s + c, -s), new Vector2(s - c, -s),
+                    new Vector2(s, -s + c),  new Vector2(s,  s - c),
+                    new Vector2(s - c,  s),  new Vector2(-s + c,  s),
+                    new Vector2(-s,  s - c), new Vector2(-s, -s + c),
+                };
+                mesh = BuildPlateMesh(poly, thick);
+                _plateCache[key] = mesh;
+            }
+            var go = new GameObject("Truss_Gusset");
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>();
+            go.transform.SetParent(parent, worldPositionStays: false);
+            go.transform.localPosition = localPos;
+            go.transform.localRotation = faceRot;
+            Colorize(go, color);
+            return go;
+        }
+
+        // 평면 볼록 다각형(로컬 XY 점들)을 thickness(로컬 Z)로 압출한 판재 — 앞/뒤 캡 + 옆면.
+        // 플랫 셰이딩: 캡·옆면이 정점을 공유하지 않게 면마다 별도 정점을 둬 모서리가 날카롭게(강철판 느낌).
+        static Mesh BuildPlateMesh(Vector2[] poly, float thickness)
+        {
+            int n = poly.Length;
+            // CCW 보정 — 앞면(+Z) 캡 노멀이 바깥(+Z)을 향하게.
+            float area = 0f;
+            for (int i = 0; i < n; i++) { var a = poly[i]; var b = poly[(i + 1) % n]; area += a.x * b.y - b.x * a.y; }
+            var p = poly;
+            if (area < 0f) { p = new Vector2[n]; for (int i = 0; i < n; i++) p[i] = poly[n - 1 - i]; }
+
+            float hz = thickness * 0.5f;
+            var v = new List<Vector3>();
+            var t = new List<int>();
+
+            // 앞 캡(+Z) — 자체 정점
+            int f0 = v.Count;
+            for (int i = 0; i < n; i++) v.Add(new Vector3(p[i].x, p[i].y, hz));
+            for (int i = 1; i < n - 1; i++) { t.Add(f0); t.Add(f0 + i); t.Add(f0 + i + 1); }
+            // 뒤 캡(-Z) — 자체 정점(역와인딩)
+            int b0 = v.Count;
+            for (int i = 0; i < n; i++) v.Add(new Vector3(p[i].x, p[i].y, -hz));
+            for (int i = 1; i < n - 1; i++) { t.Add(b0); t.Add(b0 + i + 1); t.Add(b0 + i); }
+            // 옆면 — 변마다 4정점(공유 안 함)
+            for (int i = 0; i < n; i++)
+            {
+                int j = (i + 1) % n;
+                int q = v.Count;
+                v.Add(new Vector3(p[i].x, p[i].y,  hz));   // fi
+                v.Add(new Vector3(p[i].x, p[i].y, -hz));   // bi
+                v.Add(new Vector3(p[j].x, p[j].y,  hz));   // fj
+                v.Add(new Vector3(p[j].x, p[j].y, -hz));   // bj
+                t.Add(q); t.Add(q + 1); t.Add(q + 2);
+                t.Add(q + 2); t.Add(q + 1); t.Add(q + 3);
+            }
+            var m = new Mesh { name = "STS_Plate" };
+            m.SetVertices(v); m.SetTriangles(t, 0);
+            m.RecalculateNormals(); m.RecalculateBounds();
             return m;
         }
 

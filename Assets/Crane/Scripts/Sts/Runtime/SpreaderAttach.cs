@@ -22,8 +22,12 @@ namespace Container.Crane.Sts
 
         public bool HasContainer => attached != null;
         public Transform AttachedContainer => attached;
+        /// <summary>적재된 컨테이너 질량(kg). 없으면 0. Rigidbody.mass를 그대로 반환 — 라벨/HUD 표시용.</summary>
+        public float AttachedMassKg => attachedBody != null ? attachedBody.mass : 0f;
 
         Transform Point => attachPoint != null ? attachPoint : transform;
+        /// <summary>컨테이너가 매달리는 기준 Transform. 네트워크 동기화가 클라이언트에서 동일 위치에 컨테이너를 붙이는 데 사용.</summary>
+        public Transform AttachAnchor => Point;
 
         public void Configure(Transform point)
         {

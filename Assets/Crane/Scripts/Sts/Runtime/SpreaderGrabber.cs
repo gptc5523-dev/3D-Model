@@ -161,37 +161,73 @@ namespace Container.Crane.Sts
             var attach = crane.Attach;
             var hoist = crane.Spreader;
             Transform ap = AttachPoint;
-            if (attach == null || hoist == null || ap == null || attach.HasContainer) return;
+            if (attach == null || hoist == null || ap == null) return;
 
-            // 부착점 XZ footprint 안의 컨테이너 중 윗면이 가장 높은 것 → 그 위에서 멈춤
+            // 아래로 내려가면 안 되는 기준면(refBottomY)과, '바로 위에 있는지' 판정에 쓰는 중심(refCenter)을 정한다.
+            //  - 컨테이너를 들고 있으면: 들고 있는 컨테이너의 '밑면'과 그 XZ 중심
+            //    → 바로 밑에 깔린 컨테이너 윗면 위에 밑면이 얹히고 멈춤(깔아뭉개기/땅속 관통 방지).
+            //  - 빈 스프레더면: 부착점(점) — 기존 통과 방지 동작.
+            float refBottomY;
+            Vector3 refCenter;
+            if (attach.HasContainer)
+            {
+                if (!TryBounds(attach.AttachedContainer, out Bounds held)) return;
+                refBottomY = held.min.y;
+                refCenter = held.center;
+            }
+            else
+            {
+                refBottomY = ap.position.y;
+                refCenter = ap.position;
+            }
+
+            // refCenter가 '바로 위(XZ)'에 있는 외부 컨테이너 중 윗면이 가장 높은 것 → 그 위에서 멈춤.
+            //   중심-위 판정이라 '옆에 나란히 놓인' 컨테이너는 제외된다(잡자마자 옆 컨테이너 높이로
+            //   끌려 올라가던 문제 방지). bodies는 크레인 자식(스프레더/들고 있는 컨테이너)을 제외한다.
+            //
+            // 여유(overMargin):
+            //   - 컨테이너를 들고 있을 땐 0 → '정확히 위'일 때만 받침으로 인정. passXZmargin(0.1m)은
+            //     1/24 미니어처(폭 ~0.1m)에선 컨테이너 폭만큼 커서, 옆(넓은 옆면 쪽)에 내려놓으려 해도
+            //     중심이 옆 컨테이너 footprint 안으로 들어가 '위'로 오인 → 투명 벽처럼 안 내려가던 문제 해결.
+            //   - 빈 스프레더는 약간의 여유(부착점은 점이라 필요). 단 저장된 passXZmargin(0.1m)은 미니어처엔
+            //     너무 커서 0.03m로 상한 — 빈 스프레더가 옆 컨테이너에 멀리서부터 걸리던 것 방지.
+            float overMargin = attach.HasContainer ? 0f : Mathf.Min(passXZmargin, 0.03f);
             float top = float.MinValue;
             bool over = false;
-            Vector3 p = ap.position;
             foreach (var rb in bodies)
             {
-                if (rb == null || !TryBounds(rb.transform, out Bounds b)) continue;
-                // footprint까지 수평 거리(안쪽이면 0) — passXZmargin 안이면 '위'로 간주
-                float dx = Mathf.Max(b.min.x - p.x, p.x - b.max.x); if (dx < 0f) dx = 0f;
-                float dz = Mathf.Max(b.min.z - p.z, p.z - b.max.z); if (dz < 0f) dz = 0f;
-                if (dx * dx + dz * dz > passXZmargin * passXZmargin) continue;
+                if (rb == null) continue;
+                // 크레인 자식(스프레더/방금 잡은 컨테이너)은 제외. bodies는 0.5s마다만 갱신돼
+                // 잡은 직후 자기 자신이 목록에 남아 '자기 윗면'을 받침으로 오인 → 끝까지 치솟던 버그 방지.
+                if (rb.transform.IsChildOf(transform)) continue;
+                if (!TryBounds(rb.transform, out Bounds b)) continue;
+                // refCenter가 후보 footprint(±overMargin) 안에 들어와야 '바로 위'로 인정
+                if (refCenter.x < b.min.x - overMargin || refCenter.x > b.max.x + overMargin) continue;
+                if (refCenter.z < b.min.z - overMargin || refCenter.z > b.max.z + overMargin) continue;
                 if (b.max.y > top) { top = b.max.y; over = true; }
             }
             if (!over) return;
 
             float limit = top + topClearance;
-            if (p.y < limit) hoist.MoveTo(hoist.Current + (limit - p.y));   // 로컬 Y ≈ 월드 Y
+            if (refBottomY < limit) hoist.MoveTo(hoist.Current + (limit - refBottomY));   // 로컬 Y ≈ 월드 Y
         }
 
-        // 기준점에서 grabRange 안의 가장 가까운 컨테이너(콜라이더 있으면 그것 우선)
+        // 1/24 미니어처에서 집기 인식 반경의 코드 상한(m). 씬에 저장된 크레인의 grabRange(기본 0.35)는
+        // 실측 ≈8.4m로 너무 넓어 '조금만 옆으로 가도 인식'됐다. 직렬화 값을 못 바꾸는 경우에도
+        // 타이트하게 동작하도록 효과 반경을 이 값 이하로 제한한다(더 작게 튜닝은 허용).
+        const float MaxGrabRange = 0.1f;
+
+        // 기준점에서 (제한된) grabRange 안의 가장 가까운 컨테이너(콜라이더 있으면 그것 우선)
         Transform FindNearest(Vector3 gp, out float dist)
         {
             dist = float.MaxValue;
+            float range = Mathf.Min(grabRange, MaxGrabRange);
 
-            // 콜라이더 기반 우선 — grabRange 안의 콜라이더 중 크레인 외부 Rigidbody가 달린 것들 중 '가장 가까운' 1개
+            // 콜라이더 기반 우선 — range 안의 콜라이더 중 크레인 외부 Rigidbody가 달린 것들 중 '가장 가까운' 1개
             //   (예전: 첫 hit을 그대로 잡아 원치 않는 컨테이너가 짚히던 문제 → 최근접으로 선택)
             Transform nearestCol = null;
             float nearestColD = float.MaxValue;
-            var hits = Physics.OverlapSphere(gp, grabRange);
+            var hits = Physics.OverlapSphere(gp, range);
             foreach (var h in hits)
             {
                 var rb = h.attachedRigidbody;
@@ -208,7 +244,7 @@ namespace Container.Crane.Sts
                 if (rb == null || rb.transform.IsChildOf(transform)) continue;
                 if (!TryBounds(rb.transform, out Bounds b)) continue;
                 float d = Vector3.Distance(gp, b.ClosestPoint(gp));   // 바운즈 표면까지 거리
-                if (d <= grabRange && d < dist) { dist = d; best = rb.transform; }
+                if (d <= range && d < dist) { dist = d; best = rb.transform; }
             }
             return best;
         }

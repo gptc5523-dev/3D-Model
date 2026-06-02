@@ -8,7 +8,7 @@ namespace Container.Crane.Sts
     /// </summary>
     [AddComponentMenu("Container/STS Crane/Spreader Hoist")]
     [DisallowMultipleComponent]
-    public sealed class SpreaderHoist : MonoBehaviour, IAxisMover
+    public sealed class SpreaderHoist : AxisMoverBase
     {
         [Header("승강 범위 (로컬 Y, 미터)")]
         [SerializeField] float min = 0.05f;
@@ -18,22 +18,21 @@ namespace Container.Crane.Sts
         // SpreaderGrabber가 잡을 때 설정, 놓을 때 0으로. 0이면 빈 스프레더(기존 동작).
         float floorOffset = 0f;
         public void SetFloorOffset(float v) => floorOffset = Mathf.Max(0f, v);
+        /// <summary>현재 하강 한계 오프셋(m). 네트워크 동기화가 클라이언트에 동일 한계를 재현하는 데 사용.</summary>
+        public float FloorOffset => floorOffset;
 
-        public float Min => min;
-        public float Max => max;
-        public float Current => transform.localPosition.y;
+        public override float Min => min;
+        public override float Max => max;
 
-        public void MoveTo(float value)
+        // 하강 한계만 floorOffset 만큼 올린다(MoveToNormalized의 Lerp 끝점은 기존대로 min..max 유지).
+        protected override float LowerLimit => min + floorOffset;
+
+        protected override float ReadAxis() => transform.localPosition.y;
+        protected override void WriteAxis(float clamped)
         {
-            float clamped = Mathf.Clamp(value, min + floorOffset, max);
             var p = transform.localPosition;
             p.y = clamped;
             transform.localPosition = p;
-        }
-
-        public void MoveToNormalized(float t01)
-        {
-            MoveTo(Mathf.Lerp(min, max, Mathf.Clamp01(t01)));
         }
 
         public void Configure(float minY, float maxY)
@@ -43,16 +42,8 @@ namespace Container.Crane.Sts
         }
 
 #if UNITY_EDITOR
-        void OnDrawGizmosSelected()
-        {
-            Transform parent = transform.parent != null ? transform.parent : transform;
-            Vector3 a = parent.TransformPoint(new Vector3(transform.localPosition.x, min, transform.localPosition.z));
-            Vector3 b = parent.TransformPoint(new Vector3(transform.localPosition.x, max, transform.localPosition.z));
-            Gizmos.color = new Color(1f, 0.85f, 0.2f, 0.9f);
-            Gizmos.DrawLine(a, b);
-            Gizmos.DrawWireSphere(a, 0.04f);
-            Gizmos.DrawWireSphere(b, 0.04f);
-        }
+        protected override int GizmoAxis => 1;   // Y
+        protected override Color GizmoColor => new Color(1f, 0.85f, 0.2f, 0.9f);
 #endif
     }
 }
